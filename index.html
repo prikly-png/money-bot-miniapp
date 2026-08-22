@@ -134,7 +134,15 @@ body {
   letter-spacing: -0.035em;   /* оптический размер: крупное сжимаем */
   line-height: 1;
   display: block;
+  /* Тап по числу переключает валюту показа. Отдельной кнопки нет намеренно:
+     самая крупная валюта на экране — здесь, по ней и жмут. */
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 120ms ease;
 }
+.hero-value:active { opacity: 0.5; }
 .hero-label {
   margin-top: var(--s3);
   font-size: 14px;
@@ -232,7 +240,35 @@ body {
   text-transform: uppercase;
   color: var(--ink-faint);
 }
-.section-note { font-size: 11px; color: var(--ink-faint); }
+/* Подпись «в чём» — она же переключатель валюты. Пунктир снизу: в мире бумаги
+   так помечают сноску, к которой можно обратиться, и это не спорит с линовкой.
+
+   Цель тапа расширена псевдоэлементом, а не паддингом: паддинг сбил бы
+   выравнивание по базовой линии с заголовком «ФОНДЫ» в этой же флекс-строке. */
+.section-note {
+  position: relative;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0 0 1px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-faint);
+  border-bottom: 1px dashed var(--ink-ghost);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 120ms ease;
+}
+.section-note::after {
+  content: '';
+  position: absolute;
+  inset: -14px -10px;         /* ≥44px по вертикали, layout не двигает */
+}
+.section-note:active { color: var(--ink-soft); }
+.section-note:disabled {
+  border-bottom-color: transparent;
+  cursor: default;
+}
 
 .fund {
   display: flex;
@@ -390,7 +426,7 @@ body {
   </header>
 
   <section class="hero">
-    <span class="hero-value num" id="perDay">—</span>
+    <span class="hero-value num" id="perDay" role="button" tabindex="0">—</span>
     <div class="hero-label">доступно в день</div>
     <div class="hero-math" id="math"></div>
 
@@ -412,7 +448,7 @@ body {
   <section>
     <div class="section-head">
       <span class="section-title">Фонды</span>
-      <span class="section-note">в долларах</span>
+      <button class="section-note" id="curNote" type="button">в долларах</button>
     </div>
     <div id="funds"></div>
   </section>
@@ -465,22 +501,67 @@ function applyTheme() {
 /* --- Форматирование ------------------------------------------------------- */
 
 var MINUS = '−';   /* U+2212, а не дефис: у типографского минуса своя ширина */
-var DOLLAR = '$';
+
+/* --- Валюта экрана --------------------------------------------------------
+   Числа с бэкенда ВСЕГДА в долларах — доллар здесь базовая валюта учёта.
+   Тап переключает только ПОКАЗ: $ → € → ₽ → $. Никакой арифметики бюджета
+   это не трогает, шкала и остаток считаются в долларах и конвертируются
+   в последний момент, при выводе.
+
+   Курсы приходят из строки 26 главного листа — те же, которыми лист считает
+   ИТОГ$. Свои брать неоткуда и не нужно: иначе экран показывал бы не то,
+   что таблица.
+
+   Знак ставим ПРЕФИКСОМ у всех трёх, включая рубль. По-русски привычнее
+   «4 564 ₽», но колонка фондов выровнена по правому краю: суффикс сдвигал бы
+   цифры на ширину знака, и ровная колонка развалилась бы при каждом тапе.
+
+   Выбор НЕ запоминается между открытиями — экран всегда открывается
+   в долларах. Иначе через месяц рублёвое число читалось бы как долларовое. */
+var CURRENCIES = [
+  { code: 'USD', sign: '$', note: 'в долларах' },
+  { code: 'EUR', sign: '€', note: 'в евро'     },
+  { code: 'RUB', sign: '₽', note: 'в рублях'   }
+];
+
+var curRates = { USD: 1 };
+var curCycle = [CURRENCIES[0]];
+var curIdx   = 0;
+
+function activeCur() { return curCycle[curIdx]; }
+
+/* Валюта без курса в цикл НЕ попадает.
+   Подставить единицу вместо пустого курса — значит показать долларовые числа
+   со значком евро: молча и уверенно неверно. Пусть лучше валюты не будет. */
+function setRates(rates) {
+  curRates = { USD: 1 };
+  CURRENCIES.forEach(function (c) {
+    if (c.code === 'USD') return;
+    var r = Number(rates && rates[c.code]);
+    if (isFinite(r) && r > 0) curRates[c.code] = r;
+  });
+  curCycle = CURRENCIES.filter(function (c) { return curRates[c.code]; });
+  if (curIdx >= curCycle.length) curIdx = 0;
+}
+
+function toActive(usd) {
+  return (Number(usd) || 0) * curRates[activeCur().code];
+}
 
 /* Текстовый вариант — для подписей обычным шрифтом. */
 function money(n) {
-  var v = Math.round(Number(n) || 0);
-  return (v < 0 ? MINUS : '') + DOLLAR + Math.abs(v).toLocaleString('ru-RU');
+  var v = Math.round(toActive(n));
+  return (v < 0 ? MINUS : '') + activeCur().sign + Math.abs(v).toLocaleString('ru-RU');
 }
 
 /* Вариант для моноширинных мест: разделитель разрядов рисуем сами (.gsep),
    иначе он занимает полную ширину знака и число зияет дырой.
    Внутри только цифры и наша разметка — чужих строк здесь не бывает. */
 function moneyHtml(n) {
-  var v = Math.round(Number(n) || 0);
+  var v = Math.round(toActive(n));
   var body = Math.abs(v).toLocaleString('ru-RU')
                .replace(/[    ]/g, '<i class="gsep"></i>');
-  return (v < 0 ? MINUS : '') + DOLLAR + body;
+  return (v < 0 ? MINUS : '') + activeCur().sign + body;
 }
 
 function plural(n, one, few, many) {
@@ -499,7 +580,15 @@ function timeStamp(iso) {
 
 /* --- Отрисовка ------------------------------------------------------------ */
 
+/* Последнее показанное — чтобы тап по валюте перерисовал экран, не ходя
+   заново в сеть: конвертация целиком на клиенте, данные те же. */
+var lastData = null, lastStale = false;
+
 function render(data, isStale) {
+  lastData  = data;
+  lastStale = !!isStale;
+  setRates(data.rates);
+
   var content = document.getElementById('content');
   content.classList.remove('hidden');
   content.classList.toggle('stale', !!isStale);
@@ -518,9 +607,31 @@ function render(data, isStale) {
 
   renderGauge(Number(data.perDay) || 0, Number(data.planPerDay) || 0);
   renderFunds(data.funds || []);
+  renderCurNote();
 
   document.getElementById('stamp').textContent =
     (isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt);
+}
+
+/* Подпись у заголовка «Фонды» — она же переключатель и она же ответ на
+   вопрос «а это сейчас в чём». Пунктир говорит, что по ней можно нажать;
+   когда переключать не на что (курсов не пришло), пунктир снимается —
+   мёртвая на вид кнопка честнее живой на вид, но неработающей. */
+function renderCurNote() {
+  var note = document.getElementById('curNote');
+  var only = curCycle.length < 2;
+  note.textContent = activeCur().note;
+  note.disabled = only;
+  note.setAttribute('title', only ? 'Курсы не пришли — переключать не на что' : '');
+}
+
+function cycleCurrency() {
+  if (curCycle.length < 2 || !lastData) return;
+  curIdx = (curIdx + 1) % curCycle.length;
+  render(lastData, lastStale);
+  if (tg && tg.HapticFeedback) {
+    try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
+  }
 }
 
 /* Шкала отклонения: план — ноль в центре, факт — засечка слева или справа.
@@ -852,6 +963,11 @@ function load() {
   applyTheme();
 
   document.getElementById('refresh').addEventListener('click', load);
+
+  /* Две точки входа в переключение валюты, обе — «по самой валюте»:
+     крупный знак у героя и подпись «в чём» над колонкой фондов. */
+  document.getElementById('perDay').addEventListener('click', cycleCurrency);
+  document.getElementById('curNote').addEventListener('click', cycleCurrency);
 
   var saved = localStorage.getItem(LS_URL);
   if (saved) API_URL = saved;
