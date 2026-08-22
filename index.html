@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Бюджет</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+/* ===========================================================================
+   MONEY BOT — TELEGRAM MINI APP (FEAT-010, v1)
+
+   МИР. Это не финтех-приложение, а личный леджер поверх Google-таблицы,
+   которую владелец собрал сам. Отсюда бумага, чернила и линовка вместо
+   карточек с тенями. Фонды здесь — не счета, а разметка поверх счетов
+   (конверты), поэтому у них нет коробок: только линованные строки, как
+   в бухгалтерской книге.
+
+   ГЛУБИНА. Одна стратегия — волосяные линии, ни одной тени. Это бумага.
+   Заодно снимает вечную проблему теней в тёмной теме.
+
+   ТЕМА. Telegram решает, светло или темно; свои значения бумаги и чернил
+   мы держим сами и подкрашиваем ПОД СЕБЯ хром телеграма (setBackgroundColor),
+   а не наоборот. Иначе тёплая бумага утонула бы в нейтральном сером.
+   =========================================================================== */
+
+:root {
+  /* Бумага и чернила — светлая тема */
+  --paper:        #F4F1EA;   /* небелёная бухгалтерская бумага */
+  --paper-sunk:   #EBE7DE;   /* углубление: то, что «вдавлено» в лист */
+  --rule:         rgba(43, 41, 37, 0.10);   /* линовка */
+  --rule-strong:  rgba(43, 41, 37, 0.18);   /* разделитель разделов */
+
+  --ink:          #23211D;   /* основные чернила */
+  --ink-soft:     rgba(35, 33, 29, 0.62);   /* подписи */
+  --ink-faint:    rgba(35, 33, 29, 0.40);   /* метаданные */
+  --ink-ghost:    rgba(35, 33, 29, 0.22);   /* шкала, засечки */
+
+  --ledger:       #6E8A69;   /* зелёная линовка ledger-paper — «в норме» */
+  --brick:        #A6503C;   /* красные чернила — минус, отставание */
+
+  /* Шкала: 4px */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
+
+  --r-sm: 6px;  --r-md: 10px;
+
+  --font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  /* Цифры — моноширинные намеренно: в бухгалтерии колонка чисел всегда
+     моноширинная (лента арифмометра, графа леджера). Тёплая бумага вокруг
+     не даёт этому читаться как терминал. */
+  --font-num:  ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Roboto Mono", monospace;
+}
+
+:root.dark {
+  --paper:        #1B1A18;
+  --paper-sunk:   #211F1C;
+  --rule:         rgba(238, 232, 220, 0.10);
+  --rule-strong:  rgba(238, 232, 220, 0.16);
+
+  --ink:          #EDE8DE;
+  --ink-soft:     rgba(237, 232, 222, 0.60);
+  --ink-faint:    rgba(237, 232, 222, 0.38);
+  --ink-ghost:    rgba(237, 232, 222, 0.20);
+
+  --ledger:       #8FAA89;   /* в тёмной десатурируем и осветляем */
+  --brick:        #C2705A;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-wrap: pretty;
+  /* Телеграм открывает вебвью поверх чата — резких скачков цвета быть не должно */
+  transition: background-color 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+body {
+  padding:
+    var(--s5)
+    var(--s5)
+    calc(var(--s8) + env(safe-area-inset-bottom, 0px));
+  max-width: 560px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
+
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+/* Разделитель разрядов. В моноширинном шрифте ЛЮБОЙ пробельный символ
+   занимает полную ширину знака, и «$24 000» зияет дырой. Поэтому разделитель
+   рисуем сами — пустой inline-block заданной ширины, независимо от шрифта. */
+.gsep { display: inline-block; width: 0.3em; }
+
+/* --- Шапка --------------------------------------------------------------- */
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s8);
+}
+.head-title {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.head-cycle { font-size: 11px; color: var(--ink-faint); }
+
+/* --- Герой: сколько сегодня можно ---------------------------------------
+   Один фокус на экран. Побеждает размером, весом и воздухом вокруг.
+   Под ним — СОБСТВЕННАЯ АРИФМЕТИКА числа. В этом продукте дневной лимит
+   не настройка, а следствие: Остаток ÷ дни до ЗП. Показать деление —
+   значит объяснить, почему завтра число другое.
+   ---------------------------------------------------------------------- */
+
+.hero { margin-bottom: var(--s8); }
+
+.hero-value {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 52px;
+  font-weight: 600;
+  letter-spacing: -0.035em;   /* оптический размер: крупное сжимаем */
+  line-height: 1;
+  display: block;
+}
+.hero-label {
+  margin-top: var(--s3);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.hero-math {
+  margin-top: var(--s1);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+/* --- Шкала отклонения от плана -------------------------------------------
+   НЕ прогресс-бар: залитого трека нет, «съеденной доли» нет. План — это
+   ноль на оси, факт — засечка слева (жмёмся) или справа (идём с запасом).
+   Так вопрос «отстаю или нет» читается без чтения чисел.
+   ------------------------------------------------------------------------ */
+
+.gauge { margin-top: var(--s6); }
+
+.gauge-track {
+  position: relative;
+  height: 22px;
+}
+.gauge-line {
+  position: absolute;
+  top: 11px;
+  left: 0; right: 0;
+  height: 1px;
+  background: var(--rule);
+}
+.gauge-zero {                 /* засечка плана */
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 1px;
+  height: 17px;
+  background: var(--ink-ghost);
+  transform: translateX(-0.5px);
+}
+.gauge-mark {                 /* факт */
+  position: absolute;
+  top: 5px;
+  width: 3px;
+  height: 13px;
+  border-radius: 1.5px;
+  background: var(--ledger);
+  transform: translateX(-1.5px);
+  transition: left 320ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.gauge-mark.behind { background: var(--brick); }
+
+/* Подписи стоят НАД и ПОД своими засечками, а не по краям строки:
+   «план» по центру над своим тиком, отклонение — под маркером факта.
+   Разные строки => пересечься не могут, и каждая подпись указывает на своё. */
+.gauge-top, .gauge-bottom {
+  position: relative;
+  height: 15px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.gauge-plan, .gauge-delta {
+  position: absolute;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: left 320ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.gauge-plan { left: 50%; }
+.gauge-delta { font-weight: 500; }
+.gauge-delta.ahead  { color: var(--ledger); }
+.gauge-delta.behind { color: var(--brick); }
+
+/* --- Фонды: линованные строки, не карточки -------------------------------
+   Порядок — как в таблице (строки 13–22), а не по убыванию суммы:
+   это его собственная раскладка по приоритетам, сортировать = стереть смысл.
+   ------------------------------------------------------------------------ */
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--rule-strong);
+  margin-bottom: var(--s1);
+}
+.section-title {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.section-note { font-size: 11px; color: var(--ink-faint); }
+
+.fund {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s4);
+  min-height: 44px;
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.fund:last-child { border-bottom: none; }
+.fund-name { font-size: 15px; font-weight: 400; }
+.fund-sum {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.fund-sum.negative { color: var(--brick); }
+.fund-sum.zero     { color: var(--ink-ghost); }
+
+/* --- Подвал -------------------------------------------------------------- */
+
+.foot {
+  margin-top: var(--s8);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+.foot-stamp { font-size: 11px; color: var(--ink-faint); }
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--rule-strong);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  /* Оптическое выравнивание: слева чуть меньше из-за глифа обновления */
+  padding: 9px 14px 9px 12px;
+  border-radius: var(--r-sm);
+  min-height: 40px;
+  cursor: pointer;
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1),
+              border-color 120ms ease,
+              color 120ms ease;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.45; cursor: default; transform: none; }
+
+/* --- Состояния ------------------------------------------------------------
+   BUG-009 (дашборд): сообщение об ошибке НЕЛЬЗЯ писать в контейнер, где
+   лежит форма ввода URL — оно затирает форму, и чинить становится нечем.
+   Поэтому #errorBlock живёт отдельно и ничего не затирает.
+   ------------------------------------------------------------------------ */
+
+#content { animation: rise 200ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+#content.stale { opacity: 0.45; transition: opacity 160ms ease; }
+
+.notice {
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+  padding: var(--s4);
+  margin-bottom: var(--s5);
+  background: var(--paper-sunk);
+}
+.notice-title { font-size: 14px; font-weight: 600; margin-bottom: var(--s1); }
+.notice-body  { font-size: 13px; color: var(--ink-soft); }
+.notice-body code {
+  font-family: var(--font-num);
+  font-size: 12px;
+  background: var(--rule);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.notice-body p { margin: var(--s2) 0 0; }
+.notice.alarm { border-color: var(--brick); }
+.notice.alarm .notice-title { color: var(--brick); }
+
+.setup-input {
+  width: 100%;
+  margin-top: var(--s3);
+  padding: 10px var(--s3);
+  min-height: 44px;
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--paper-sunk);      /* поле «вдавлено», а не приподнято */
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-sm);
+}
+.setup-input:focus {
+  outline: none;
+  border-color: var(--ink-faint);
+}
+
+.hidden { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- Ошибки живут ОТДЕЛЬНО от содержимого и от формы настройки (BUG-009) -->
+<div id="errorBlock" class="hidden"></div>
+<div id="setupBlock" class="hidden"></div>
+
+<div id="content" class="hidden">
+  <header class="head">
+    <span class="head-title">Бюджет</span>
+    <span class="head-cycle" id="cycle"></span>
+  </header>
+
+  <section class="hero">
+    <span class="hero-value num" id="perDay">—</span>
+    <div class="hero-label">доступно в день</div>
+    <div class="hero-math" id="math"></div>
+
+    <div class="gauge" id="gauge">
+      <div class="gauge-top">
+        <span class="gauge-plan" id="gaugePlan"></span>
+      </div>
+      <div class="gauge-track">
+        <div class="gauge-line"></div>
+        <div class="gauge-zero"></div>
+        <div class="gauge-mark" id="gaugeMark" style="left:50%"></div>
+      </div>
+      <div class="gauge-bottom">
+        <span class="gauge-delta" id="gaugeDelta"></span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-title">Фонды</span>
+      <span class="section-note">в долларах</span>
+    </div>
+    <div id="funds"></div>
+  </section>
+
+  <footer class="foot">
+    <span class="foot-stamp" id="stamp"></span>
+    <button class="btn" id="refresh" type="button">↻ Обновить</button>
+  </footer>
+</div>
+
+<script>
+/* ===========================================================================
+   Money Bot Mini App — клиент
+
+   Данные берём из Apps Script через JSONP (как expense_dashboard.html):
+   обычный fetch упрётся в CORS, а тег <script> — нет.
+
+   Авторизация — подпись Telegram (initData), НЕ общий ключ: страница
+   статическая и лежит на публичном хостинге, ключ утёк бы в исходник.
+   Проверку делает phase16_miniapp.js на стороне Apps Script.
+   =========================================================================== */
+
+var API_URL_PLACEHOLDER = '__PASTE_WEB_APP_URL__';
+
+/* Адрес веб-приложения Apps Script. Пока не прошит — берём из localStorage,
+   куда его кладёт форма настройки ниже. */
+var API_URL = API_URL_PLACEHOLDER;
+
+var LS_URL   = 'miniapp_api_url';
+var LS_CACHE = 'miniapp_last_payload';
+
+var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+
+/* --- Тема ----------------------------------------------------------------
+   Telegram решает светло/темно, значения бумаги и чернил — наши.
+   Хром телеграма подкрашиваем ПОД страницу, а не наоборот. */
+function applyTheme() {
+  var dark = tg ? (tg.colorScheme === 'dark')
+                : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.classList.toggle('dark', dark);
+
+  if (tg) {
+    var paper = getComputedStyle(document.documentElement)
+                  .getPropertyValue('--paper').trim();
+    try { tg.setBackgroundColor(paper); } catch (e) {}
+    try { tg.setHeaderColor(paper); } catch (e) {}
+  }
+}
+
+/* --- Форматирование ------------------------------------------------------- */
+
+var MINUS = '−';   /* U+2212, а не дефис: у типографского минуса своя ширина */
+var DOLLAR = '$';
+
+/* Текстовый вариант — для подписей обычным шрифтом. */
+function money(n) {
+  var v = Math.round(Number(n) || 0);
+  return (v < 0 ? MINUS : '') + DOLLAR + Math.abs(v).toLocaleString('ru-RU');
+}
+
+/* Вариант для моноширинных мест: разделитель разрядов рисуем сами (.gsep),
+   иначе он занимает полную ширину знака и число зияет дырой.
+   Внутри только цифры и наша разметка — чужих строк здесь не бывает. */
+function moneyHtml(n) {
+  var v = Math.round(Number(n) || 0);
+  var body = Math.abs(v).toLocaleString('ru-RU')
+               .replace(/[    ]/g, '<i class="gsep"></i>');
+  return (v < 0 ? MINUS : '') + DOLLAR + body;
+}
+
+function plural(n, one, few, many) {
+  var a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5)   return few;
+  if (b === 1)          return one;
+  return many;
+}
+
+function timeStamp(iso) {
+  var d = iso ? new Date(iso) : new Date();
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+/* --- Отрисовка ------------------------------------------------------------ */
+
+function render(data, isStale) {
+  var content = document.getElementById('content');
+  content.classList.remove('hidden');
+  content.classList.toggle('stale', !!isStale);
+
+  var days = Number(data.daysLeft) || 0;
+  document.getElementById('cycle').textContent =
+    days > 0 ? days + ' ' + plural(days, 'день', 'дня', 'дней') + ' до зарплаты' : '';
+
+  document.getElementById('perDay').innerHTML = moneyHtml(data.perDay);
+
+  /* Арифметика числа — подпись продукта: видно, ОТКУДА взялся лимит */
+  var math = document.getElementById('math');
+  math.textContent = days > 0
+    ? money(data.remainder) + ' остатка ÷ ' + days + ' ' + plural(days, 'день', 'дня', 'дней')
+    : money(data.remainder) + ' остатка';
+
+  renderGauge(Number(data.perDay) || 0, Number(data.planPerDay) || 0);
+  renderFunds(data.funds || []);
+
+  document.getElementById('stamp').textContent =
+    (isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt);
+}
+
+/* Шкала отклонения: план — ноль в центре, факт — засечка слева или справа.
+   Отклонение прижимаем к ±50% плана, чтобы засечка не улетала за край,
+   а подпись под ней — к 12..88%, чтобы не обрезалась о край экрана. */
+function renderGauge(fact, plan) {
+  var gauge = document.getElementById('gauge');
+  if (!plan) { gauge.classList.add('hidden'); return; }
+  gauge.classList.remove('hidden');
+
+  var delta  = fact - plan;
+  var ratio  = Math.max(-0.5, Math.min(0.5, delta / plan));
+  var markPc = 50 + ratio * 100;
+  var behind = delta < 0;
+
+  var mark = document.getElementById('gaugeMark');
+  mark.style.left = markPc + '%';
+  mark.classList.toggle('behind', behind);
+
+  document.getElementById('gaugePlan').textContent = 'план ' + money(plan);
+
+  var d = document.getElementById('gaugeDelta');
+  if (Math.abs(delta) < 1) {
+    d.textContent = 'ровно по плану';
+    d.className = 'gauge-delta';
+    d.style.left = '50%';
+  } else {
+    d.textContent = (behind ? MINUS : '+') + money(Math.abs(delta)).replace(MINUS, '');
+    d.className = 'gauge-delta ' + (behind ? 'behind' : 'ahead');
+    d.style.left = Math.max(12, Math.min(88, markPc)) + '%';
+  }
+}
+
+function renderFunds(funds) {
+  var box = document.getElementById('funds');
+  box.textContent = '';
+
+  if (!funds.length) {
+    var empty = document.createElement('div');
+    empty.className = 'fund';
+    var msg = document.createElement('span');
+    msg.className = 'fund-name';
+    msg.style.color = 'var(--ink-faint)';
+    msg.textContent = 'Фондов нет';
+    empty.appendChild(msg);
+    box.appendChild(empty);
+    return;
+  }
+
+  funds.forEach(function (f) {
+    var row = document.createElement('div');
+    row.className = 'fund';
+
+    var name = document.createElement('span');
+    name.className = 'fund-name';
+    name.textContent = f.name;          /* имя из таблицы — только textContent */
+
+    var sum = document.createElement('span');
+    sum.className = 'fund-sum';
+    if (f.usd < 0)   sum.classList.add('negative');
+    else if (!f.usd) sum.classList.add('zero');
+    sum.innerHTML = moneyHtml(f.usd);
+
+    row.appendChild(name);
+    row.appendChild(sum);
+    box.appendChild(row);
+  });
+}
+
+/* --- Сообщения ------------------------------------------------------------ */
+
+/* Кнопка повтора живёт В САМОМ сообщении, а не только в подвале.
+   Подвал лежит внутри #content, а он скрыт, пока данных не было ни разу —
+   тогда текст «нажмите Обновить» указывал бы на кнопку, которой на экране
+   нет. Тупик того же рода, что BUG-009 на дашборде. */
+function showError(title, bodyHtml, alarm) {
+  var box = document.getElementById('errorBlock');
+  box.className = 'notice' + (alarm ? ' alarm' : '');
+  box.innerHTML =
+    '<div class="notice-title"></div>' +
+    '<div class="notice-body"></div>' +
+    '<div style="margin-top:14px"><button class="btn" id="retryBtn" type="button">↻ Повторить</button></div>';
+  box.querySelector('.notice-title').textContent = title;
+  box.querySelector('.notice-body').innerHTML = bodyHtml;
+  document.getElementById('retryBtn').addEventListener('click', load);
+}
+function clearError() {
+  var box = document.getElementById('errorBlock');
+  box.className = 'hidden';
+  box.textContent = '';
+}
+
+/* Форма ввода адреса. Отдельный блок — ошибки её не затирают (BUG-009). */
+function showSetup(currentUrl) {
+  var box = document.getElementById('setupBlock');
+  box.className = 'notice';
+  box.innerHTML =
+    '<div class="notice-title">Адрес веб-приложения</div>' +
+    '<div class="notice-body">Ссылка вида <code>…/exec</code> из Apps Script → Развернуть. ' +
+    'Ключ <code>?key=</code> добавлять не нужно — мини-апп ходит по подписи Telegram.</div>' +
+    '<input class="setup-input" id="apiInput" placeholder="https://script.google.com/macros/s/…/exec" ' +
+    'autocapitalize="off" autocorrect="off" spellcheck="false">' +
+    '<div style="margin-top:12px"><button class="btn" id="apiSave" type="button">Сохранить</button></div>';
+
+  var input = document.getElementById('apiInput');
+  input.value = currentUrl || '';
+  document.getElementById('apiSave').addEventListener('click', function () {
+    var v = input.value.trim();
+    if (!v) return;
+    localStorage.setItem(LS_URL, v);
+    API_URL = v;
+    box.className = 'hidden';
+    box.textContent = '';
+    load();
+  });
+}
+
+/* --- Транспорт ------------------------------------------------------------ */
+
+var jsonpSeq = 0;
+
+function jsonp(url, params, onDone, onFail) {
+  var name = 'miniappCb' + (++jsonpSeq) + '_' + Date.now();
+  var script = document.createElement('script');
+  var timer;
+
+  function cleanup() {
+    clearTimeout(timer);
+    try { delete window[name]; } catch (e) { window[name] = undefined; }
+    if (script.parentNode) script.parentNode.removeChild(script);
+  }
+
+  window[name] = function (data) { cleanup(); onDone(data); };
+
+  timer = setTimeout(function () { cleanup(); onFail('timeout'); }, 15000);
+  script.onerror = function () { cleanup(); onFail('network'); };
+
+  var qs = ['action=miniapp', 'callback=' + name];
+  for (var k in params) qs.push(k + '=' + encodeURIComponent(params[k]));
+  script.src = url + (url.indexOf('?') === -1 ? '?' : '&') + qs.join('&');
+  document.body.appendChild(script);
+}
+
+/* --- Загрузка ------------------------------------------------------------- */
+
+function reasonMessage(reason) {
+  if (reason === 'owner_not_set') {
+    return {
+      title: 'Остался один шаг',
+      body: 'Подпись Telegram сошлась, но владелец мини-аппа ещё не назначен. ' +
+            'Откройте редактор Apps Script и запустите функцию ' +
+            '<code>approveLastMiniAppUser</code> — она возьмёт ваш id из этого входа.' +
+            '<p>После этого вернитесь сюда и нажмите «Повторить».</p>',
+      alarm: false
+    };
+  }
+  if (reason === 'foreign_user') {
+    return { title: 'Доступ закрыт',
+             body: 'Этот аккаунт Telegram не назначен владельцем.', alarm: true };
+  }
+  if (reason === 'expired') {
+    return { title: 'Подпись устарела',
+             body: 'Закройте мини-апп и откройте заново — Telegram выдаст свежую подпись.',
+             alarm: false };
+  }
+  if (reason === 'no_token') {
+    return { title: 'Бот не настроен',
+             body: 'В Script Properties нет <code>BOT_TOKEN</code>.', alarm: true };
+  }
+  if (reason === 'malformed' || reason === 'no_user') {
+    return {
+      title: 'Нет подписи Telegram',
+      body: 'Страница открыта не из Telegram — тогда подписи взяться неоткуда. ' +
+            'Откройте мини-апп через бота.',
+      alarm: false
+    };
+  }
+  return { title: 'Доступ закрыт',
+           body: 'Причина: <code>' + (reason || 'неизвестна') + '</code>', alarm: true };
+}
+
+function readCache() {
+  try { return JSON.parse(localStorage.getItem(LS_CACHE) || 'null'); }
+  catch (e) { return null; }
+}
+
+function load() {
+  var btn = document.getElementById('refresh');
+  btn.disabled = true;
+
+  var initData = tg && tg.initData ? tg.initData : '';
+
+  jsonp(API_URL, { initData: initData }, function (data) {
+    btn.disabled = false;
+
+    if (data && data.error) {
+      var m = reasonMessage(data.reason);
+      showError(m.title, m.body, m.alarm);
+      var cached = readCache();
+      if (cached) render(cached, true);
+      return;
+    }
+    if (!data || typeof data.perDay === 'undefined') {
+      showError('Пустой ответ', 'Apps Script ответил, но данных не прислал.', true);
+      return;
+    }
+
+    clearError();
+    localStorage.setItem(LS_CACHE, JSON.stringify(data));
+    render(data, false);
+    if (tg && tg.HapticFeedback) {
+      try { tg.HapticFeedback.impactOccurred('light'); } catch (e) {}
+    }
+
+  }, function (kind) {
+    btn.disabled = false;
+    var cached = readCache();
+    showError(
+      kind === 'timeout' ? 'Долго не отвечает' : 'Не удалось соединиться',
+      'Apps Script не ответил.' + (cached ? ' Ниже — последние сохранённые числа.' : '') +
+      '<p>Проверьте связь и попробуйте ещё раз.</p>',
+      false
+    );
+    if (cached) render(cached, true);
+  });
+}
+
+/* --- Старт ---------------------------------------------------------------- */
+
+(function init() {
+  if (tg) {
+    try { tg.ready(); } catch (e) {}
+    try { tg.expand(); } catch (e) {}
+    try { tg.onEvent('themeChanged', applyTheme); } catch (e) {}
+  }
+  applyTheme();
+
+  document.getElementById('refresh').addEventListener('click', load);
+
+  var saved = localStorage.getItem(LS_URL);
+  if (saved) API_URL = saved;
+
+  /* Показываем сохранённые числа СРАЗУ: вебвью открывается «холодным»,
+     и пустой экран на секунду хуже, чем слегка приглушённые прошлые данные. */
+  var cached = readCache();
+  if (cached) render(cached, true);
+
+  if (!API_URL || API_URL === API_URL_PLACEHOLDER) {
+    showSetup('');
+    return;
+  }
+  load();
+})();
+</script>
+</body>
+</html>
