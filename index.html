@@ -208,8 +208,13 @@ body {
 .gauge-delta.behind { color: var(--brick); }
 
 /* --- Фонды: линованные строки, не карточки -------------------------------
-   Порядок — как в таблице (строки 13–22), а не по убыванию суммы:
-   это его собственная раскладка по приоритетам, сортировать = стереть смысл.
+   Порядок — ручной, по вниманию (см. FUND_PRIMARY в скрипте), а не по
+   убыванию суммы: это его собственная раскладка по приоритетам,
+   сортировать по числу = стереть смысл.
+
+   Часть фондов уходит под разворот. Резервы (Депозит, Подушка) и «Мои»
+   не решают вопрос «сколько сегодня можно» — на первом экране они только
+   разбавляют четыре строки, ради которых экран открывают.
    ------------------------------------------------------------------------ */
 
 .section-head {
@@ -249,6 +254,37 @@ body {
 }
 .fund-sum.negative { color: var(--brick); }
 .fund-sum.zero     { color: var(--ink-ghost); }
+
+/* Разворот. Строка того же роста, что и фонд, но тише чернилами: это не
+   запись леджера, а корешок страницы. Суммы здесь намеренно нет — иначе
+   строка читается как ещё один фонд, и разворачивать её незачем.
+   Границы своей не имеет: сверху её рисует border-bottom последнего фонда. */
+.fund-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--s3) 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.fund-more:active { color: var(--ink-soft); }
+
+.fund-caret {
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.fund-more[aria-expanded="true"] .fund-caret { transform: rotate(180deg); }
 
 /* --- Подвал -------------------------------------------------------------- */
 
@@ -518,11 +554,83 @@ function renderGauge(fact, plan) {
   }
 }
 
+/* --- Раскладка фондов -----------------------------------------------------
+   Порядок на экране — СВОЙ, не табличный. В таблице строки 13–22 стоят так,
+   как удобно формулам; здесь нужен порядок по вниманию: сначала то, из чего
+   тратят в этом месяце.
+
+   Списки живут на странице, а не в Apps Script, намеренно. Это экранная
+   раскладка: она меняется вместе с приоритетами (раз в месяц-два), и менять
+   её не должно стоить редеплоя веб-приложения — достаточно deploy_miniapp.sh.
+   В Apps Script остаётся только СМЫСЛОВОЕ отсеивание (MINIAPP_HIDDEN_FUNDS):
+   «Тани» — транзитный карман, «Страховая» — клиринг долга, они не фонды
+   вообще. «Квартира» же — обычный фонд, просто сейчас не нужна на глазах,
+   и это решение экрана, а не модели данных.                                 */
+var FUND_PRIMARY   = ['Отпуск', 'Техника', 'Бадди', 'Мама'];
+var FUND_SECONDARY = ['Мои', 'Депозит', 'Подушка'];
+var FUND_HIDDEN    = ['Квартира'];
+
+/* Разворот держим в памяти страницы: «Обновить» не должен схлопывать то,
+   что человек только что открыл. Между запусками не помним — экран
+   открывают ради первых четырёх строк. */
+var fundsExpanded = false;
+
+function fundKey(name) { return String(name || '').trim().toLowerCase(); }
+
+function arrangeFunds(funds) {
+  var byKey = {};
+  funds.forEach(function (f) { byKey[fundKey(f.name)] = f; });
+
+  var used = {};
+  function take(names) {
+    var out = [];
+    names.forEach(function (n) {
+      var k = fundKey(n);
+      if (byKey[k]) { out.push(byKey[k]); used[k] = true; }
+    });
+    return out;
+  }
+
+  var top  = take(FUND_PRIMARY);
+  var rest = take(FUND_SECONDARY);
+  FUND_HIDDEN.forEach(function (n) { used[fundKey(n)] = true; });
+
+  /* Фонд, которого нет ни в одном списке, — новая строка в таблице.
+     Кладём его в разворот, а не прячем: лишняя строка видна сразу,
+     пропавшее число ищут долго. */
+  funds.forEach(function (f) {
+    if (!used[fundKey(f.name)]) rest.push(f);
+  });
+
+  return { top: top, rest: rest };
+}
+
+function fundRow(f) {
+  var row = document.createElement('div');
+  row.className = 'fund';
+
+  var name = document.createElement('span');
+  name.className = 'fund-name';
+  name.textContent = f.name;            /* имя из таблицы — только textContent */
+
+  var sum = document.createElement('span');
+  sum.className = 'fund-sum';
+  if (f.usd < 0)   sum.classList.add('negative');
+  else if (!f.usd) sum.classList.add('zero');
+  sum.innerHTML = moneyHtml(f.usd);
+
+  row.appendChild(name);
+  row.appendChild(sum);
+  return row;
+}
+
 function renderFunds(funds) {
   var box = document.getElementById('funds');
   box.textContent = '';
 
-  if (!funds.length) {
+  var split = arrangeFunds(funds || []);
+
+  if (!split.top.length && !split.rest.length) {
     var empty = document.createElement('div');
     empty.className = 'fund';
     var msg = document.createElement('span');
@@ -534,24 +642,45 @@ function renderFunds(funds) {
     return;
   }
 
-  funds.forEach(function (f) {
-    var row = document.createElement('div');
-    row.className = 'fund';
+  split.top.forEach(function (f) { box.appendChild(fundRow(f)); });
 
-    var name = document.createElement('span');
-    name.className = 'fund-name';
-    name.textContent = f.name;          /* имя из таблицы — только textContent */
+  if (!split.rest.length) return;
 
-    var sum = document.createElement('span');
-    sum.className = 'fund-sum';
-    if (f.usd < 0)   sum.classList.add('negative');
-    else if (!f.usd) sum.classList.add('zero');
-    sum.innerHTML = moneyHtml(f.usd);
+  /* Свёрнутые строки строим сразу и прячем классом, а не пересобираем по
+     клику: пересборка теряет фокус на кнопке и роняет анимацию стрелки. */
+  var more = document.createElement('div');
+  split.rest.forEach(function (f) { more.appendChild(fundRow(f)); });
 
-    row.appendChild(name);
-    row.appendChild(sum);
-    box.appendChild(row);
+  var label = document.createElement('span');
+  label.textContent = 'Ещё ' + split.rest.length + ' ' +
+    plural(split.rest.length, 'фонд', 'фонда', 'фондов');
+
+  var caret = document.createElement('span');
+  caret.className = 'fund-caret';
+  caret.textContent = '▾';
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'fund-more';
+  btn.appendChild(label);
+  btn.appendChild(caret);
+
+  function sync() {
+    btn.setAttribute('aria-expanded', fundsExpanded ? 'true' : 'false');
+    more.className = fundsExpanded ? '' : 'hidden';
+  }
+  sync();
+
+  btn.addEventListener('click', function () {
+    fundsExpanded = !fundsExpanded;
+    sync();
+    if (tg && tg.HapticFeedback) {
+      try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
+    }
   });
+
+  box.appendChild(btn);
+  box.appendChild(more);
 }
 
 /* --- Сообщения ------------------------------------------------------------ */
