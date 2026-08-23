@@ -281,6 +281,34 @@ body {
 }
 .fund:last-child { border-bottom: none; }
 .fund-name { font-size: 15px; font-weight: 400; }
+
+/* Строка фонда — фильтр списка трат (FEAT-033). Своего вида у «нажимаемости»
+   нет намеренно: подчёркивания и стрелки на семи строках подряд превратили бы
+   тихую колонку в панель управления. Обратная связь — отклик на нажатие,
+   а результат виден сразу под фондами. */
+.fund[role="button"] {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 120ms ease;
+}
+.fund[role="button"]:active { opacity: 0.5; }
+
+/* Выбранный фонд. Метка — засечка на полях слева, как галочка карандашом
+   на бумаге; заливкой строки пришлось бы вводить второй фон и спорить
+   с линовкой. */
+.fund.picked { position: relative; }
+.fund.picked::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 2px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 1px;
+  background: var(--ink-soft);
+}
+.fund.picked .fund-name { font-weight: 500; }
 .fund-sum {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
@@ -321,6 +349,107 @@ body {
   transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .fund-more[aria-expanded="true"] .fund-caret { transform: rotate(180deg); }
+
+/* --- Последние траты (FEAT-033) ------------------------------------------
+   Не «выписка по счёту», а память: куда ушло за последние дни. Поэтому здесь
+   нет ни времени, ни источника, ни статуса — только мерчант и сумма, а дата
+   вынесена в подзаголовок дня, одна на группу.
+
+   Суммы — в валюте операции и БЕЗ пересчёта в валюту экрана: тап по валюте
+   (FEAT-031) переключает фонды, где число и так оценка в долларах, а здесь
+   сумма операции — факт. Знак ставим префиксом по той же причине, что у
+   фондов: колонка выровнена вправо, суффикс разной ширины ($ vs ₾) рвал бы
+   ряд цифр.
+
+   Блок свёрнут по умолчанию и живёт ПОД фондами — экран открывают ради
+   «сколько сегодня можно», а не ради истории.
+   ------------------------------------------------------------------------ */
+
+.tx-section { margin-top: var(--s8); }
+
+.tx {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s4);
+  min-height: 38px;          /* ниже фонда: строк много, и это не цель тапа */
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.tx:last-child { border-bottom: none; }
+
+.tx-name {
+  font-size: 14px;
+  /* Имя мерчанта приходит из банка и бывает строкой-простынёй.
+     Режем показом, а не данными: обрезать на бэкенде — значит решить за
+     экран, сколько знаков влезет, не зная ширины телефона. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tx-sum {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Метка фондовой траты. Такие траты не бьют по дневному бюджету, и без
+   пометки «Аренда ₾1200» посреди списка искажает ощущение «сколько я
+   потратил». Значок тот же, которым их помечает бот в списке «🏦 Последние». */
+.tx-fund {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+/* Подзаголовок дня. Ведёт себя как надпись на полях: мельче строк, тише
+   чернилами, без линовки — иначе спорит с границами самих строк. */
+.tx-day {
+  margin: var(--s4) 0 var(--s1);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.tx-day:first-child { margin-top: var(--s2); }
+
+/* Граница зарплатного цикла. Не «фильтр», а отметка на полях: всё, что выше,
+   потрачено в текущем цикле — том самом, из которого считается дневной лимит
+   наверху экрана. Линия сильнее обычной линовки, подпись справа мелко. */
+.tx-cycle {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin: var(--s5) 0 var(--s2);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.tx-cycle::before {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--rule-strong);
+}
+
+/* Служебные строки блока: «Загружаю», «трат нет», отказ загрузки. Ростом
+   с обычную строку, чтобы блок не прыгал при смене состояния. */
+.tx-state {
+  padding: var(--s3) 0;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+.tx-state .btn { margin-top: var(--s3); }
+
+/* Сноска о неполноте. В !Транзакции попадает не всё: наличные без ручного
+   ввода и медицина через страховую проходят мимо. Без оговорки список
+   читается как «всё, что было со счетами», и не сходится с балансом. */
+.tx-note {
+  margin-top: var(--s3);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-ghost);
+}
 
 /* --- Подвал -------------------------------------------------------------- */
 
@@ -451,6 +580,16 @@ body {
       <button class="section-note" id="curNote" type="button">в долларах</button>
     </div>
     <div id="funds"></div>
+  </section>
+
+  <!-- FEAT-033: последние траты. Свёрнуто по умолчанию; подпись справа —
+       она же переключатель, она же индикатор загрузки и отказа. -->
+  <section class="tx-section">
+    <div class="section-head">
+      <span class="section-title" id="txTitle">Последние траты</span>
+      <button class="section-note" id="txToggle" type="button">показать</button>
+    </div>
+    <div id="txBody" class="hidden"></div>
   </section>
 
   <footer class="foot">
@@ -608,6 +747,8 @@ function render(data, isStale) {
   renderGauge(Number(data.perDay) || 0, Number(data.planPerDay) || 0);
   renderFunds(data.funds || []);
   renderCurNote();
+  renderTx();   /* сам список от валюты экрана не зависит — перерисовываем ради
+                   заголовка с фильтром и подписи «показать/скрыть» */
 
   document.getElementById('stamp').textContent =
     (isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt);
@@ -718,7 +859,17 @@ function arrangeFunds(funds) {
 
 function fundRow(f) {
   var row = document.createElement('div');
-  row.className = 'fund';
+  row.className = 'fund' + (txFund === f.name ? ' picked' : '');
+
+  /* FEAT-033: строка фонда фильтрует список трат под фондами. Верх экрана
+     тап не трогает: perDay и шкала считаются по циклу целиком, и дёргать их
+     от фильтра значило бы показать «дневной лимит фонда», которого нет. */
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  row.addEventListener('click', function () { pickTxFund(f.name); });
+  row.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickTxFund(f.name); }
+  });
 
   var name = document.createElement('span');
   name.className = 'fund-name';
@@ -792,6 +943,357 @@ function renderFunds(funds) {
 
   box.appendChild(btn);
   box.appendChild(more);
+}
+
+/* --- Последние траты (FEAT-033) -------------------------------------------
+   Задача блока — память: куда ушли деньги за последние дни. Не сверка
+   («правильно ли бот записал» — там нужны время и источник) и не правка
+   («повесить фонд задним числом» — это живёт в боте, FEAT-022). Экран
+   остаётся read-only.
+
+   Окно НЕ равно видимому: с бэкенда приходит 200 трат, показываем 10.
+   Так фильтр по фонду работает мгновенно и на клиенте — иначе каждый тап
+   стоил бы похода в Apps Script, а по редкому фонду короткое окно дало бы
+   одну запись и соврало бы «трат не было».                                 */
+
+var TX_FIRST = 10;   /* сколько строк видно сразу */
+var TX_STEP  = 10;   /* сколько добавляет «Ещё» */
+
+/* Фонды, из которых не тратят вообще: Депозит и Подушка — резервы, бот
+   в них только откладывает. Пустой список по ним — не «данных нет», а «здесь
+   трат не бывает», и сказать это надо словами, иначе пустота читается сбоем.
+   Источник истины — SPEND_FUNDS в phase6_fund.js; здесь список продублирован
+   осознанно, как FUND_PRIMARY выше: это текст экрана, а не модель. */
+var TX_NEVER_SPENT = ['Депозит', 'Подушка'];
+
+var TX_SIGN = { USD: '$', EUR: '€', RUB: '₽', GEL: '₾', KZT: '₸' };
+
+var txState      = 'idle';   /* idle | loading | ready | error */
+var txItems      = [];
+var txCycleStart = 0;
+var txErrorText  = '';
+var txExpanded   = false;
+var txShown      = TX_FIRST;
+var txFund       = null;     /* активный фильтр по фонду */
+var txRefocus    = false;    /* вернуть фокус на «Ещё» после дорисовки */
+
+/* --- Чистые помощники (покрыты test_miniapp_tx.js) --- */
+
+/* Незнакомый код валюты показываем кодом, а не подставляем доллар:
+   «$250» вместо «250 DKK» — молча и уверенно неверно. FX-слой (FEAT-025)
+   позволяет тратить в любой валюте, справочник !Курсы правится без деплоя,
+   и новый код доедет сюда раньше, чем эта таблица.
+
+   Отбивку от числа знак НЕ несёт: в моноширинном шрифте пробел занимает
+   полную ширину знака, и «DKK 85» зияет дырой. Щель рисует .gsep в разметке. */
+function txSign(code) {
+  var c = String(code || '').toUpperCase();
+  return TX_SIGN[c] || c;
+}
+
+/* Суммы целые: экран про «куда ушло», а не про сверку до цента. Исключение —
+   траты меньше единицы валюты: округление показало бы «₾0», то есть трату,
+   которой как будто не было. */
+function txAmountText(n) {
+  var v = Number(n) || 0;
+  if (v !== 0 && Math.abs(v) < 1) return String(v.toFixed(1)).replace('.', ',');
+  return Math.round(v).toLocaleString('ru-RU');
+}
+
+/* Разделитель разрядов рисуем сами, как в moneyHtml: в моноширинном шрифте
+   любой пробельный символ занимает полную ширину знака, и «₾1 200» зияет
+   дырой. Внутри только наши цифры и наша разметка — чужих строк не бывает,
+   знак валюты приклеивается отдельным текстовым узлом. */
+function txAmountHtml(n) {
+  return txAmountText(n).replace(/[   ]/g, '<i class="gsep"></i>');
+}
+
+function txDayStamp(ts) {
+  var d = new Date(ts);
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+
+/* Месяцы своей таблицей, а не toLocaleDateString: движки расходятся в том,
+   что считать сокращением. WebKit (вебвью Telegram) на июле отдаёт полное
+   «24 июля», а на августе сокращённое «21 авг» — на одном экране это читается
+   как небрежность. Заодно исчезает разница между тем, что видит браузер
+   на телефоне, и тем, что проверяет Node в тестах. */
+var TX_MONTHS = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн',
+                 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+function txShortDate(ts) {
+  var d = new Date(ts);
+  return d.getDate() + ' ' + TX_MONTHS[d.getMonth()];
+}
+
+/* «Вчера» считаем сдвигом календарного дня, а не вычитанием суток в
+   миллисекундах: в поездке (Копенгаген) перевод часов сделал бы вчерашний
+   день позавчерашним на один день в году. */
+function txDayLabel(ts, nowTs) {
+  if (!ts) return 'без даты';
+  var day = txDayStamp(ts);
+  if (day === txDayStamp(nowTs)) return 'Сегодня';
+
+  var y = new Date(nowTs);
+  y.setDate(y.getDate() - 1);
+  if (day === txDayStamp(y.getTime())) return 'Вчера';
+
+  return txShortDate(ts);
+}
+
+/* Индекс первой траты ПРОШЛОГО цикла — там и рисуем границу. −1 = все
+   показанные траты из текущего цикла, границы в окне нет. */
+function txCycleSplit(items, cycleStart) {
+  if (!cycleStart) return -1;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].ts && items[i].ts < cycleStart) return i;
+  }
+  return -1;
+}
+
+function txFilterByFund(items, fund) {
+  if (!fund) return items;
+  return items.filter(function (it) { return it.fund === fund; });
+}
+
+/* --- Отрисовка блока --- */
+
+function txRowNode(it) {
+  var row = document.createElement('div');
+  row.className = 'tx';
+
+  var name = document.createElement('span');
+  name.className = 'tx-name';
+  name.textContent = it.merchant || '—';   /* строка от банка — только textContent */
+
+  /* Метку ставим только в общем списке: когда фильтр уже по фонду,
+     она стоит у каждой строки и не значит ничего. */
+  if (it.fund && !txFund) {
+    var mark = document.createElement('span');
+    mark.className = 'tx-fund';
+    mark.textContent = '🏦';
+    mark.title = it.fund;
+    name.appendChild(mark);
+  }
+
+  /* Знак валюты — текстовым узлом, число — разметкой: код валюты приходит
+     из таблицы, и склеивать его с HTML незачем. */
+  var sum = document.createElement('span');
+  sum.className = 'tx-sum num';
+
+  var sign = txSign(it.currency);
+  sum.appendChild(document.createTextNode(sign));
+
+  /* Односимвольный знак ($, ₾) прижимается к числу вплотную, буквенный код
+     (DKK) — через узкую щель, иначе «DKK85» слипается. Пробелом её ставить
+     нельзя, см. txSign. */
+  if (sign.length > 1) {
+    var gap = document.createElement('i');
+    gap.className = 'gsep';
+    sum.appendChild(gap);
+  }
+
+  var val = document.createElement('span');
+  val.innerHTML = txAmountHtml(it.amount);
+  sum.appendChild(val);
+
+  row.appendChild(name);
+  row.appendChild(sum);
+  return row;
+}
+
+function txStateNode(text, withRetry) {
+  var box = document.createElement('div');
+  box.className = 'tx-state';
+
+  var msg = document.createElement('div');
+  msg.textContent = text;
+  box.appendChild(msg);
+
+  if (withRetry) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = '↻ Повторить';
+    btn.addEventListener('click', loadTx);
+    box.appendChild(btn);
+  }
+  return box;
+}
+
+function renderTx() {
+  var toggle = document.getElementById('txToggle');
+  var title  = document.getElementById('txTitle');
+  var box    = document.getElementById('txBody');
+
+  /* Подпись справа — единственное место, где отказ загрузки виден, пока блок
+     свёрнут. Молчать нельзя: фоновая загрузка, которая тихо не сработала,
+     выглядит как «трат просто нет». */
+  toggle.textContent = txExpanded ? 'скрыть'
+                     : (txState === 'error' ? 'не загрузились' : 'показать');
+  toggle.setAttribute('aria-expanded', txExpanded ? 'true' : 'false');
+
+  title.textContent = txFund ? 'Траты · ' + txFund : 'Последние траты';
+
+  box.className = txExpanded ? '' : 'hidden';
+  box.textContent = '';
+  if (!txExpanded) return;
+
+  if (txState === 'loading' || txState === 'idle') {
+    box.appendChild(txStateNode('Загружаю…', false));
+    return;
+  }
+  if (txState === 'error') {
+    box.appendChild(txStateNode(txErrorText || 'Траты не загрузились.', true));
+    return;
+  }
+
+  var list = txFilterByFund(txItems, txFund);
+
+  if (!list.length) {
+    if (txFund && TX_NEVER_SPENT.indexOf(txFund) !== -1) {
+      box.appendChild(txStateNode('Из этого фонда не тратим — он на сбережения.', false));
+    } else if (txFund) {
+      box.appendChild(txStateNode('Среди последних трат по этому фонду ничего нет.', false));
+    } else {
+      box.appendChild(txStateNode('Пока пусто.', false));
+    }
+    box.appendChild(txNoteNode());
+    return;
+  }
+
+  var visible = list.slice(0, txShown);
+  var splitAt = txCycleSplit(visible, txCycleStart);
+  var now     = Date.now();
+  var lastDay = null;
+
+  for (var i = 0; i < visible.length; i++) {
+    /* Граница цикла крупнее границы дня, поэтому идёт перед заголовком дня. */
+    if (i === splitAt) {
+      var sep = document.createElement('div');
+      sep.className = 'tx-cycle';
+      var when = document.createElement('span');
+      when.textContent = txShortDate(txCycleStart) + ' · начало цикла';
+      sep.appendChild(when);
+      box.appendChild(sep);
+      lastDay = null;
+    }
+
+    var label = txDayLabel(visible[i].ts, now);
+    if (label !== lastDay) {
+      var head = document.createElement('div');
+      head.className = 'tx-day';
+      head.textContent = label;
+      box.appendChild(head);
+      lastDay = label;
+    }
+
+    box.appendChild(txRowNode(visible[i]));
+  }
+
+  if (list.length > txShown) {
+    var left = list.length - txShown;
+    var step = Math.min(TX_STEP, left);
+
+    var lbl = document.createElement('span');
+    lbl.textContent = 'Ещё ' + step;
+
+    var caret = document.createElement('span');
+    caret.className = 'fund-caret';
+    caret.textContent = '▾';
+
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'fund-more';
+    more.appendChild(lbl);
+    more.appendChild(caret);
+    more.addEventListener('click', function () {
+      txShown += TX_STEP;
+      txRefocus = true;          /* список дорисовывается — кнопка уезжает вниз */
+      renderTx();
+    });
+    box.appendChild(more);
+
+    if (txRefocus) { txRefocus = false; try { more.focus(); } catch (e) {} }
+  } else {
+    txRefocus = false;
+  }
+
+  box.appendChild(txNoteNode());
+}
+
+/* Сноска о неполноте журнала. Живёт под списком, а не над ним: это оговорка,
+   а не предупреждение, и открывают блок ради строк, а не ради неё. */
+function txNoteNode() {
+  var note = document.createElement('div');
+  note.className = 'tx-note';
+  note.textContent = 'Только траты, записанные автоматически или вручную ' +
+                     'через бота. Наличные мимо бота и медицина через страховую сюда не попадают.';
+  return note;
+}
+
+function haptic() {
+  if (tg && tg.HapticFeedback) {
+    try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
+  }
+}
+
+function toggleTxSection() {
+  txExpanded = !txExpanded;
+  renderTx();
+  haptic();
+}
+
+/* Тап по фонду: ставит фильтр и разворачивает блок. Повторный тап по тому же
+   фонду снимает фильтр, но блок оставляет открытым — свернуть его обратно
+   значило бы наказать за любопытство. */
+function pickTxFund(name) {
+  txFund   = (txFund === name) ? null : name;
+  txShown  = TX_FIRST;
+  txExpanded = true;
+  renderFunds(lastData && lastData.funds ? lastData.funds : []);
+  renderTx();
+  haptic();
+}
+
+/* Отдельный запрос, фоном, после того как экран уже нарисован. В localStorage
+   НЕ кладём: кеш там держит числа для холодного старта, а список трат — вещь
+   второстепенная, ради неё раздувать сохранённый payload незачем.
+
+   Запасного пути нет намеренно. Не сработало — блок скажет об этом и даст
+   «Повторить»; тихая догрузка по требованию замаскировала бы мёртвый
+   prefetch, и мы бы о нём не узнали. */
+function loadTx() {
+  txState = 'loading';
+  renderTx();
+
+  var initData = tg && tg.initData ? tg.initData : '';
+
+  jsonp(API_URL, { initData: initData, part: 'tx' }, function (data) {
+    if (data && data.error) {
+      txState = 'error';
+      txErrorText = reasonMessage(data.reason).title + '. Траты не загрузились.';
+      renderTx();
+      return;
+    }
+    if (!data || !data.tx) {
+      txState = 'error';
+      txErrorText = 'Apps Script ответил, но трат не прислал.';
+      renderTx();
+      return;
+    }
+
+    txItems      = data.tx;
+    txCycleStart = Number(data.cycleStart) || 0;
+    txState      = 'ready';
+    renderTx();
+
+  }, function (kind) {
+    txState = 'error';
+    txErrorText = kind === 'timeout' ? 'Список трат не дождались.'
+                                     : 'Список трат не загрузился.';
+    renderTx();
+  });
 }
 
 /* --- Сообщения ------------------------------------------------------------ */
@@ -939,6 +1441,11 @@ function load() {
       try { tg.HapticFeedback.impactOccurred('light'); } catch (e) {}
     }
 
+    /* FEAT-033: список трат догружаем фоном, уже показав дневной бюджет.
+       Отдельным запросом — чтение хвоста !Транзакции тяжелее четырёх getRange
+       главного листа и не должно задерживать герой. */
+    loadTx();
+
   }, function (kind) {
     btn.disabled = false;
     var cached = readCache();
@@ -968,6 +1475,8 @@ function load() {
      крупный знак у героя и подпись «в чём» над колонкой фондов. */
   document.getElementById('perDay').addEventListener('click', cycleCurrency);
   document.getElementById('curNote').addEventListener('click', cycleCurrency);
+
+  document.getElementById('txToggle').addEventListener('click', toggleTxSection);
 
   var saved = localStorage.getItem(LS_URL);
   if (saved) API_URL = saved;
