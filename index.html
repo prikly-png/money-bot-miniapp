@@ -835,13 +835,13 @@ var FUND_HIDDEN    = ['Квартира'];
    открывают ради первых четырёх строк. */
 var fundsExpanded = false;
 
-/* Скрытие суммы фонда по тапу (решение пользователя): открыл мини-апп —
-   суммы видны, спрятал на время чужого взгляда — сам вернул. Между
-   запусками НЕ помним, тем же приёмом, что fundsExpanded/выбор валюты
-   (FEAT-031) — безопасный дефолт был бы «всегда скрыто», но это чужое
-   решение за пользователя, а не то, что он просил. Ключ — имя фонда,
-   переживает перерисовку списка (смена валюты, фильтр по фонду). */
-var maskedFunds = {};
+/* Скрытие сумм фондов по тапу (решение пользователя, поправлено 24.08.2026
+   по живому тесту): либо скрыты ВСЕ фонды, либо ни одного — по одному не
+   имеет смысла, соседние строки всё равно выдают порядок величины. Один
+   общий флаг, а не маска по имени фонда. Открыл мини-апп — суммы видны,
+   спрятал на время чужого взгляда — сам вернул; между запусками НЕ помним,
+   тем же приёмом, что fundsExpanded/выбор валюты (FEAT-031). */
+var fundsMasked = false;
 
 function fundKey(name) { return String(name || '').trim().toLowerCase(); }
 
@@ -873,13 +873,12 @@ function arrangeFunds(funds) {
   return { top: top, rest: rest };
 }
 
-/* Рисует сумму фонда с учётом маски — общая точка и для первой отрисовки,
-   и для тычка по сумме, иначе состояния разошлись бы по двум местам. */
+/* Рисует сумму фонда с учётом общей маски — общая точка и для первой
+   отрисовки, и для перерисовки по тапу, иначе состояния разошлись бы. */
 function paintFundSum(sum, f) {
-  var masked = !!maskedFunds[f.name];
-  sum.className = 'fund-sum' + (masked ? ' masked' : (f.usd < 0 ? ' negative' : (!f.usd ? ' zero' : '')));
-  if (masked) sum.textContent = '••••';
-  else        sum.innerHTML = moneyHtml(f.usd);
+  sum.className = 'fund-sum' + (fundsMasked ? ' masked' : (f.usd < 0 ? ' negative' : (!f.usd ? ' zero' : '')));
+  if (fundsMasked) sum.textContent = '••••';
+  else             sum.innerHTML = moneyHtml(f.usd);
 }
 
 function fundRow(f) {
@@ -902,13 +901,14 @@ function fundRow(f) {
 
   /* Скрытие суммы — свой тап-таргет, не ряд целиком: имя уже занято фильтром
      (FEAT-033) выше. stopPropagation обязателен, иначе один тап по сумме
-     ещё и переключал бы фильтр под ней. */
+     ещё и переключал бы фильтр под ней. Тап по ЛЮБОЙ сумме переключает ВСЕ —
+     флаг общий, поэтому перерисовываем весь список, а не один узел. */
   var sum = document.createElement('span');
   paintFundSum(sum, f);
   sum.addEventListener('click', function (ev) {
     ev.stopPropagation();
-    maskedFunds[f.name] = !maskedFunds[f.name];
-    paintFundSum(sum, f);
+    fundsMasked = !fundsMasked;
+    renderFunds(lastData && lastData.funds ? lastData.funds : []);
     haptic();
   });
 
