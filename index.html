@@ -315,18 +315,26 @@ body {
   font-size: 15px;
   font-weight: 500;
   letter-spacing: -0.01em;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
+.fund-sum:active   { opacity: 0.5; }
 .fund-sum.negative { color: var(--brick); }
 .fund-sum.zero     { color: var(--ink-ghost); }
+.fund-sum.masked   { color: var(--ink-faint); letter-spacing: 2px; }
 
 /* Разворот. Строка того же роста, что и фонд, но тише чернилами: это не
    запись леджера, а корешок страницы. Суммы здесь намеренно нет — иначе
    строка читается как ещё один фонд, и разворачивать её незачем.
-   Границы своей не имеет: сверху её рисует border-bottom последнего фонда. */
+   Границы своей не имеет: сверху её рисует border-bottom последнего фонда.
+
+   BUG-025: подпись+стрелка выровнены вправо, а не по всей ширине — под
+   «показать/скрыть»/«в долларах» в шапке над блоком, большой палец не
+   прыгает через экран. Тап-таргет всё равно на всю ширину (width: 100%). */
 .fund-more {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--s4);
   width: 100%;
   min-height: 44px;
@@ -827,6 +835,14 @@ var FUND_HIDDEN    = ['Квартира'];
    открывают ради первых четырёх строк. */
 var fundsExpanded = false;
 
+/* Скрытие суммы фонда по тапу (решение пользователя): открыл мини-апп —
+   суммы видны, спрятал на время чужого взгляда — сам вернул. Между
+   запусками НЕ помним, тем же приёмом, что fundsExpanded/выбор валюты
+   (FEAT-031) — безопасный дефолт был бы «всегда скрыто», но это чужое
+   решение за пользователя, а не то, что он просил. Ключ — имя фонда,
+   переживает перерисовку списка (смена валюты, фильтр по фонду). */
+var maskedFunds = {};
+
 function fundKey(name) { return String(name || '').trim().toLowerCase(); }
 
 function arrangeFunds(funds) {
@@ -857,6 +873,15 @@ function arrangeFunds(funds) {
   return { top: top, rest: rest };
 }
 
+/* Рисует сумму фонда с учётом маски — общая точка и для первой отрисовки,
+   и для тычка по сумме, иначе состояния разошлись бы по двум местам. */
+function paintFundSum(sum, f) {
+  var masked = !!maskedFunds[f.name];
+  sum.className = 'fund-sum' + (masked ? ' masked' : (f.usd < 0 ? ' negative' : (!f.usd ? ' zero' : '')));
+  if (masked) sum.textContent = '••••';
+  else        sum.innerHTML = moneyHtml(f.usd);
+}
+
 function fundRow(f) {
   var row = document.createElement('div');
   row.className = 'fund' + (txFund === f.name ? ' picked' : '');
@@ -875,11 +900,17 @@ function fundRow(f) {
   name.className = 'fund-name';
   name.textContent = f.name;            /* имя из таблицы — только textContent */
 
+  /* Скрытие суммы — свой тап-таргет, не ряд целиком: имя уже занято фильтром
+     (FEAT-033) выше. stopPropagation обязателен, иначе один тап по сумме
+     ещё и переключал бы фильтр под ней. */
   var sum = document.createElement('span');
-  sum.className = 'fund-sum';
-  if (f.usd < 0)   sum.classList.add('negative');
-  else if (!f.usd) sum.classList.add('zero');
-  sum.innerHTML = moneyHtml(f.usd);
+  paintFundSum(sum, f);
+  sum.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    maskedFunds[f.name] = !maskedFunds[f.name];
+    paintFundSum(sum, f);
+    haptic();
+  });
 
   row.appendChild(name);
   row.appendChild(sum);
