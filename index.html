@@ -234,11 +234,11 @@ body {
   margin-bottom: var(--s1);
 }
 .section-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--ink-faint);
+  color: var(--ink-soft);          /* глава не может быть тише своих строк */
 }
 /* Подпись «в чём» — она же переключатель валюты. Пунктир снизу: в мире бумаги
    так помечают сноску, к которой можно обратиться, и это не спорит с линовкой.
@@ -369,7 +369,26 @@ body {
    (дневной лимит, дни до ЗП, разделитель в списке трат). Два разных
    «периода» на одном экране расходились бы молча.
    ------------------------------------------------------------------------ */
-.cat-section { margin-top: var(--s8); }
+.cat-section { margin-top: var(--s10); }
+
+/* Раскрытый блок ложится в углубление листа (02.09.2026, по живому тесту v2.27).
+   С тремя главами подряд экран читался сплошной лентой: заголовки тише строк,
+   а линия под заголовком неотличима от линовки самих строк — взгляду не за что
+   зацепиться при скролле.
+
+   Подложка вместо новых линий: границы блока видны сразу и целиком, а линовка
+   внутри остаётся единственным типом линии на экране. Цвет не новый —
+   `--paper-sunk` уже держит поле ввода и служебные плашки.
+
+   Поля растянуты за отступ страницы (`-s4` при `padding: --s5`): карман шире
+   текста, но не упирается в край экрана, иначе скругления не видно. */
+#catBody:not(.hidden),
+#txBody:not(.hidden) {
+  background: var(--paper-sunk);
+  margin: 0 calc(-1 * var(--s4));
+  padding: var(--s1) var(--s4) var(--s4);
+  border-radius: var(--r-md);
+}
 
 /* Шапка блока: сумма за период крупно, рядом — на каком дне цикла она набрана.
    Без второго числа первое не значит ничего: $1 240 на 5-й день и на 28-й —
@@ -431,6 +450,11 @@ body {
   white-space: nowrap;
 }
 .cat-sum.masked { color: var(--ink-faint); letter-spacing: 2px; }
+.cat-sum, .cat-total, .cat-aside-sum {
+  cursor: pointer;                 /* любая скрытая сумма снимает маску (BUG-027) */
+  -webkit-tap-highlight-color: transparent;
+}
+.cat-sum:active, .cat-total:active, .cat-aside-sum:active { opacity: 0.5; }
 
 /* Полоса и проценты — одной строкой под именем: три строки на категорию
    растянули бы блок на пол-экрана. */
@@ -504,7 +528,7 @@ body {
    «сколько сегодня можно», а не ради истории.
    ------------------------------------------------------------------------ */
 
-.tx-section { margin-top: var(--s8); }
+.tx-section { margin-top: var(--s10); }
 
 .tx {
   display: flex;
@@ -533,7 +557,11 @@ body {
   font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
+  cursor: pointer;                 /* сумма — тап-таргет маски (BUG-027) */
+  -webkit-tap-highlight-color: transparent;
 }
+.tx-sum:active { opacity: 0.5; }
+.tx-sum.masked { color: var(--ink-faint); letter-spacing: 2px; }
 
 /* Метка фондовой траты. Такие траты не бьют по дневному бюджету, и без
    пометки «Аренда ₾1200» посреди списка искажает ощущение «сколько я
@@ -979,13 +1007,39 @@ var FUND_HIDDEN    = ['Квартира'];
    открывают ради первых четырёх строк. */
 var fundsExpanded = false;
 
-/* Скрытие сумм фондов по тапу (решение пользователя, поправлено 24.08.2026
-   по живому тесту): либо скрыты ВСЕ фонды, либо ни одного — по одному не
-   имеет смысла, соседние строки всё равно выдают порядок величины. Один
-   общий флаг, а не маска по имени фонда. Открыл мини-апп — суммы видны,
-   спрятал на время чужого взгляда — сам вернул; между запусками НЕ помним,
-   тем же приёмом, что fundsExpanded/выбор валюты (FEAT-031). */
-var fundsMasked = false;
+/* Скрытие сумм по тапу. Решение пользователя, дважды уточнённое живыми
+   тестами:
+   - 24.08.2026 (FEAT-034): либо скрыты ВСЕ фонды, либо ни одного — по одному
+     не имеет смысла, соседние строки всё равно выдают порядок величины;
+   - 02.09.2026 (BUG-027): маска накрывает ВСЕ суммы экрана, кроме дневного
+     лимита. Пока под ней были только фонды и категории, экран выглядел
+     сломанным: точки в двух блоках и открытые суммы трат в третьем.
+
+   Дневной лимит и его арифметика остаются видны намеренно. Это не размер
+   капитала, а «сколько можно сегодня» — ради него экран и открывают,
+   в том числе при людях. Плюс тап по герою остаётся переключателем валюты
+   (FEAT-031) и не превращается в жест с двумя смыслами.
+
+   Открыл мини-апп — суммы видны, спрятал на время чужого взгляда — сам
+   вернул; между запусками НЕ помним, тем же приёмом, что fundsExpanded
+   и выбор валюты. */
+var amountsMasked = false;
+
+/* Любая скрытая сумма — тап-таргет снятия (BUG-027). Раньше маска снималась
+   только через фонды: человек смотрел на «••••» рядом с категорией, жал,
+   и ничего не происходило — приходилось скроллить вверх. Скрытая сумма
+   выглядит одинаково везде, значит и вести себя обязана одинаково.
+
+   stopPropagation обязателен: под суммой фонда лежит фильтр списка трат
+   (FEAT-033), клик утёк бы в него. */
+function toggleAmountsMask(ev) {
+  if (ev) ev.stopPropagation();
+  amountsMasked = !amountsMasked;
+  renderFunds(lastData && lastData.funds ? lastData.funds : []);
+  renderCats();
+  renderTx();
+  haptic();
+}
 
 function fundKey(name) { return String(name || '').trim().toLowerCase(); }
 
@@ -1020,8 +1074,8 @@ function arrangeFunds(funds) {
 /* Рисует сумму фонда с учётом общей маски — общая точка и для первой
    отрисовки, и для перерисовки по тапу, иначе состояния разошлись бы. */
 function paintFundSum(sum, f) {
-  sum.className = 'fund-sum' + (fundsMasked ? ' masked' : (f.usd < 0 ? ' negative' : (!f.usd ? ' zero' : '')));
-  if (fundsMasked) sum.textContent = '••••';
+  sum.className = 'fund-sum' + (amountsMasked ? ' masked' : (f.usd < 0 ? ' negative' : (!f.usd ? ' zero' : '')));
+  if (amountsMasked) sum.textContent = '••••';
   else             sum.innerHTML = moneyHtml(f.usd);
 }
 
@@ -1049,13 +1103,7 @@ function fundRow(f) {
      флаг общий, поэтому перерисовываем весь список, а не один узел. */
   var sum = document.createElement('span');
   paintFundSum(sum, f);
-  sum.addEventListener('click', function (ev) {
-    ev.stopPropagation();
-    fundsMasked = !fundsMasked;
-    renderFunds(lastData && lastData.funds ? lastData.funds : []);
-    renderCats();   /* суммы категорий под тем же общим флагом (FEAT-036) */
-    haptic();
-  });
+  sum.addEventListener('click', toggleAmountsMask);
 
   row.appendChild(name);
   row.appendChild(sum);
@@ -1255,7 +1303,17 @@ function txRowNode(it) {
   /* Знак валюты — текстовым узлом, число — разметкой: код валюты приходит
      из таблицы, и склеивать его с HTML незачем. */
   var sum = document.createElement('span');
-  sum.className = 'tx-sum num';
+  sum.className = 'tx-sum num' + (amountsMasked ? ' masked' : '');
+  sum.addEventListener('click', toggleAmountsMask);
+
+  /* BUG-027: под маской знак валюты тоже уходит. Оставить «₾••••» значило бы
+     показать, в какой стране человек платил, — это та же приватность. */
+  if (amountsMasked) {
+    sum.textContent = '••••';
+    row.appendChild(name);
+    row.appendChild(sum);
+    return row;
+  }
 
   var sign = txSign(it.currency);
   sum.appendChild(document.createTextNode(sign));
@@ -1530,8 +1588,9 @@ function catAsideNode(label, usd, first) {
 
   var sum = document.createElement('span');
   sum.className = 'cat-aside-sum';
-  if (fundsMasked) sum.textContent = '••••';
-  else             sum.textContent = money(usd);
+  if (amountsMasked) sum.textContent = '••••';
+  else               sum.textContent = money(usd);
+  sum.addEventListener('click', toggleAmountsMask);
 
   row.appendChild(name);
   row.appendChild(sum);
@@ -1552,12 +1611,14 @@ function catRow(item, total) {
   /* Суммы категорий скрываются тем же общим флагом, что и суммы фондов
      (FEAT-034): иначе спрятал фонды, а рядом открытым текстом лежит, сколько
      ушло на продукты — маска перестаёт делать то, ради чего сделана.
-     Своего тап-жеста строка не получает: в v1 внутри блока ничего
-     не кликается, чтобы не плодить второй фильтр без общего сброса. */
+     Тап по самой сумме переключает маску (BUG-027) — единственный жест
+     внутри блока в v1. Фильтр по категории по-прежнему не вводим: он
+     требует общей кнопки сброса на оба фильтра. */
   var sum = document.createElement('span');
-  sum.className = 'cat-sum' + (fundsMasked ? ' masked' : '');
-  if (fundsMasked) sum.textContent = '••••';
-  else             sum.innerHTML = moneyHtml(item.usd);
+  sum.className = 'cat-sum' + (amountsMasked ? ' masked' : '');
+  if (amountsMasked) sum.textContent = '••••';
+  else               sum.innerHTML = moneyHtml(item.usd);
+  sum.addEventListener('click', toggleAmountsMask);
 
   head.appendChild(name);
   head.appendChild(sum);
@@ -1627,9 +1688,10 @@ function renderCats() {
   lead.className = 'cat-lead';
 
   var totalNode = document.createElement('span');
-  totalNode.className = 'cat-total' + (fundsMasked ? ' masked' : '');
-  if (fundsMasked) totalNode.textContent = '••••';
-  else             totalNode.innerHTML = moneyHtml(total);
+  totalNode.className = 'cat-total' + (amountsMasked ? ' masked' : '');
+  if (amountsMasked) totalNode.textContent = '••••';
+  else               totalNode.innerHTML = moneyHtml(total);
+  totalNode.addEventListener('click', toggleAmountsMask);
 
   var dayNode = document.createElement('span');
   dayNode.className = 'cat-day';
