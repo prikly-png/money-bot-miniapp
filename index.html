@@ -1147,6 +1147,7 @@ function fundRow(f) {
   var row = document.createElement('div');
   row.className = 'fund' +
     (txFilter && txFilter.kind === 'fund' && txFilter.value === f.name ? ' picked' : '');
+  row.setAttribute('data-key', f.name);   /* якорь доводки, см. filterAnchorEl_ */
 
   /* FEAT-033: строка фонда фильтрует список трат под фондами. Верх экрана
      тап не трогает: perDay и шкала считаются по циклу целиком, и дёргать их
@@ -1661,18 +1662,79 @@ function toggleTxSection() {
   haptic();
 }
 
-/* Блок категорий стоит ВЫШЕ списка трат, поэтому тап по категории без скролла
-   даёт только засечку: результат уезжает под нижний край. Доводим экран до
-   заголовка блока трат — и делаем это одинаково для фонда и категории, иначе
-   один и тот же жест ведёт себя по-разному в двух соседних блоках.
+/* Сколько списка обязано приехать на экран вместе с фильтром: чип, заголовок
+   дня и пара строк. Меньше — и видно, что «что-то появилось», но не видно что. */
+var TX_REVEAL = 160;
 
-   Скролл мгновенный, не плавный: анимация накладывается на разворот блока
-   и на tg.expand() и в вебвью читается как рывок. */
-function scrollToTx() {
-  var el = document.getElementById('txSection');
+/* Строка, по которой тапнули, — до и после перерисовки это РАЗНЫЕ узлы
+   (repaintFilter перестраивает оба блока), поэтому ищем её по ключу, а не
+   держим ссылку. */
+function filterAnchorEl_(kind, value) {
+  var list = document.querySelectorAll(
+    kind === 'fund' ? '#funds .fund' : '#catBody .cat, #catBody .cat-aside');
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].getAttribute('data-key') === value) return list[i];
+  }
+  return null;
+}
+
+/* Доводка экрана после тапа (BUG-028).
+
+   Первая версия просто прыгала к заголовку блока трат — и на телефоне это
+   читалось как сбой: строка, по которой человек тапнул, уезжала за верхнюю
+   кромку вместе со всем блоком категорий. Точка отсчёта пропадала, а новая
+   (заголовок и чип) появлялась мгновенно, без перехода, — тап выглядел как
+   «экран куда-то выбросило».
+
+   Теперь ЯКОРЬ — сама тапнутая строка: она встаёт под верхнюю кромку и
+   остаётся видимой, список раскрывается прямо под ней. Целимся в пересечение
+   двух условий: строка не выше кромки (hi) и результат не ниже нижнего края
+   (lo). Обычно интервал непустой, и мы берём hi — контекст сохранён целиком.
+   Если блок категорий длинный и оба условия разом не выполняются, приоритет
+   у результата (lo): показать то, ради чего тапали, важнее.
+
+   Уже на месте — не двигаемся вовсе: скролл, который «доводит» на пять
+   пикселей, ощущается как дрожь.
+
+   Ищем якорь ЗАНОВО через `.picked`, а не держим ссылку на узел: repaintFilter
+   перерисовывает оба блока, и старый узел к этому моменту уже выброшен. */
+/* Свёртка остальных категорий убирает из потока всё, что стояло НАД тапнутой
+   строкой, — без компенсации страница уехала бы вверх и строка ушла бы
+   из-под пальца. Двигаем скролл ровно на столько, на сколько уехала строка:
+   она остаётся на месте экрана, а вокруг неё блок складывается. Мгновенно,
+   не плавно: это не перемещение взгляда, а отмена паразитного сдвига —
+   анимировать её значило бы показать движение, которого нет. */
+function holdAnchor(kind, value, wasTop) {
+  if (wasTop === null) return;
+  var el = filterAnchorEl_(kind, value);
   if (!el) return;
-  try { el.scrollIntoView({ block: 'start', behavior: 'auto' }); }
-  catch (e) { try { el.scrollIntoView(true); } catch (e2) {} }
+  var d = el.getBoundingClientRect().top - wasTop;
+  if (Math.abs(d) > 1) window.scrollBy(0, d);
+}
+
+function scrollToFilter() {
+  var anchor = document.querySelector('#catBody .cat.picked, #catBody .cat-aside.picked, #funds .fund.picked');
+  var chip   = document.querySelector('#txBody .tx-chip');
+  if (!anchor || !chip) return;
+
+  var y  = window.pageYOffset || document.documentElement.scrollTop || 0;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (!vh) return;
+
+  var anchorTop = anchor.getBoundingClientRect().top + y;
+  var chipTop   = chip.getBoundingClientRect().top + y;
+
+  var lo = chipTop + TX_REVEAL - vh;   /* ниже — результат не поместится */
+  var hi = anchorTop - 12;             /* выше — уедет тапнутая строка */
+
+  var target = (lo > hi) ? lo : hi;
+  if (target < 0) target = 0;
+  if (Math.abs(target - y) < 8) return;
+
+  /* Плавно: глаз должен проследить путь, иначе смена кадра снова читается
+     как выброс. Движение короткое — якорь рядом, а не через пол-страницы. */
+  try { window.scrollTo({ top: target, behavior: 'smooth' }); }
+  catch (e) { window.scrollTo(0, target); }
 }
 
 /* Перерисовать всё, что показывает активный фильтр: засечка в фондах,
@@ -1694,13 +1756,27 @@ function repaintFilter() {
 function pickTxFilter(kind, value) {
   var same = txFilter && txFilter.kind === kind && txFilter.value === value;
 
+  /* Положение строки на экране ДО перестройки — к нему и вернём (holdAnchor). */
+  var before = filterAnchorEl_(kind, value);
+  var wasTop = before ? before.getBoundingClientRect().top : null;
+
   txFilter   = same ? null : { kind: kind, value: value };
   txShown    = TX_FIRST;   /* иначе новый фильтр открылся бы сразу на 40 строк */
   txRefocus  = false;
   txExpanded = true;
+  catAll     = false;      /* новый выбор всегда складывает разбивку до одной строки */
 
   repaintFilter();
-  scrollToTx();
+
+  /* Через кадр: блок трат только что развернулся, а блок категорий сложился —
+     до пересчёта раскладки координаты и чипа, и строки ещё не существуют. */
+  function settle() {
+    holdAnchor(kind, value, wasTop);
+    scrollToFilter();
+  }
+  if (window.requestAnimationFrame) window.requestAnimationFrame(settle);
+  else settle();
+
   haptic();
 }
 
@@ -1825,6 +1901,8 @@ function catAsideNode(label, usd, first, pick) {
   name.textContent = label;
 
   if (pick) {
+    row.setAttribute('data-key', pick);     /* якорь доводки, см. filterAnchorEl_ */
+
     var caret = document.createElement('span');
     caret.className = 'cat-aside-caret';
     caret.textContent = '›';
@@ -1853,6 +1931,7 @@ function catRow(item, total) {
   var row = document.createElement('div');
   row.className = 'cat' +
     (txFilter && txFilter.kind === 'cat' && txFilter.value === item.name ? ' picked' : '');
+  row.setAttribute('data-key', item.name);   /* якорь доводки, см. filterAnchorEl_ */
 
   /* FEAT-038: строка категории фильтрует список трат под блоком — тем же
      жестом, что и строка фонда. Верх экрана тап не трогает: perDay и шкала
@@ -1975,19 +2054,35 @@ function renderCats() {
     box.appendChild(catStateNode(total ? 'Все траты цикла — из фондов.' : 'В этом цикле трат ещё нет.', false));
   }
 
-  var visible = catAll ? items : items.slice(0, CAT_FIRST);
+  /* SOLO (BUG-028). Пока фильтр по категории активен, разбивка складывается
+     до ОДНОЙ строки — той, по которой тапнули. Так решается не симптом, а
+     причина прыжка: между строкой и её составом больше не лежит полблока,
+     доводить экран почти нечем.
+
+     Складываем не в ничто, а в «Ещё N категорий»: иначе ломается сценарий
+     «посмотрел продукты — теперь кафе», сравнить две категории стало бы
+     дороже, чем до фичи. Кнопка разворачивает разбивку обратно, НЕ снимая
+     фильтр — выбранная строка остаётся с засечкой среди прочих. */
+  var solo = !!(txFilter && txFilter.kind === 'cat') && !catAll;
+
+  var visible;
+  if (solo)        visible = items.filter(function (it) { return it.name === txFilter.value; });
+  else if (catAll) visible = items;
+  else             visible = items.slice(0, CAT_FIRST);
+
   visible.forEach(function (it) { box.appendChild(catRow(it, total)); });
 
   /* Остальные категории раскрываем РАЗОМ, а не ступенями: их всего десять
      (04_data_model §5), и вторая бесконечная кнопка «Ещё» на одном экране
      с такой же кнопкой под тратами читалась бы как одна и та же. */
-  if (items.length > CAT_FIRST) {
+  var hidden = items.length - visible.length;
+  if (solo ? hidden > 0 : items.length > CAT_FIRST) {
     var more = document.createElement('button');
     more.type = 'button';
     more.className = 'fund-more';
     more.setAttribute('aria-expanded', catAll ? 'true' : 'false');
 
-    var left = items.length - CAT_FIRST;
+    var left = solo ? hidden : items.length - CAT_FIRST;
     var label = document.createElement('span');
     label.textContent = catAll ? 'Свернуть' : 'Ещё ' + left + ' ' +
       plural(left, 'категория', 'категории', 'категорий');
@@ -2013,13 +2108,19 @@ function renderCats() {
      но с другим окном (весь хвост против текущего цикла). Два разных ответа
      на один вопрос убивают доверие к экрану быстрее, чем отсутствие второго
      жеста. «Без категории» тапается — это единственный список, с которым
-     человек что-то сделает: пойдёт в бота и проставит категории. */
+     человек что-то сделает: пойдёт в бота и проставит категории.
+
+     В solo-режиме хвост складывается по тому же правилу, что и строки: на
+     экране остаётся только активная строка. Оставить рядом два чужих
+     ведра значило бы свернуть разбивку наполовину. */
+  var soloUnknown = solo && txFilter.value === CAT_UNKNOWN;
+
   var asideFirst = true;
-  if (catData.fundUsd) {
+  if (catData.fundUsd && !solo) {
     box.appendChild(catAsideNode('Из фондов', catData.fundUsd, asideFirst, null));
     asideFirst = false;
   }
-  if (catData.unknownUsd) {
+  if (catData.unknownUsd && (!solo || soloUnknown)) {
     box.appendChild(catAsideNode('Без категории', catData.unknownUsd, asideFirst, CAT_UNKNOWN));
     asideFirst = false;
   }
