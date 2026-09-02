@@ -293,11 +293,12 @@ body {
 }
 .fund[role="button"]:active { opacity: 0.5; }
 
-/* Выбранный фонд. Метка — засечка на полях слева, как галочка карандашом
-   на бумаге; заливкой строки пришлось бы вводить второй фон и спорить
-   с линовкой. */
-.fund.picked { position: relative; }
-.fund.picked::before {
+/* Выбранная строка фильтра — фонд ИЛИ категория (FEAT-038). Метка одна на
+   обе: засечка на полях слева, как галочка карандашом на бумаге; заливкой
+   строки пришлось бы вводить второй фон и спорить с линовкой. Фильтр на
+   экране один, поэтому и засечка всегда одна — двух сразу не бывает. */
+.fund.picked, .cat.picked, .cat-aside.picked { position: relative; }
+.fund.picked::before, .cat.picked::before, .cat-aside.picked::before {
   content: '';
   position: absolute;
   left: -10px;
@@ -308,7 +309,8 @@ body {
   border-radius: 1px;
   background: var(--ink-soft);
 }
-.fund.picked .fund-name { font-weight: 500; }
+.fund.picked .fund-name, .cat.picked .cat-name { font-weight: 500; }
+.cat-aside.picked { color: var(--ink-soft); }
 .fund-sum {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
@@ -423,9 +425,14 @@ body {
 .cat-vs .up   { color: var(--brick);  font-weight: 500; }
 .cat-vs .down { color: var(--ledger); font-weight: 500; }
 
+/* Строка целиком — тап-таргет фильтра (FEAT-038). Сумма внутри остаётся своим
+   таргетом маски: toggleAmountsMask гасит всплытие сам, ровно как в строке
+   фонда. Цена промаха в обе стороны — один тап назад. */
 .cat {
   padding: var(--s3) 0;
   border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .cat:last-child { border-bottom: none; }
 
@@ -513,6 +520,12 @@ body {
 }
 .cat-aside.first { margin-top: var(--s4); }
 
+/* Из двух строк хвоста тапается только «Без категории» — засечка ›  нужна
+   затем, что рядом стоит внешне такая же строка, которая не тапается. */
+.cat-aside.link { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.cat-aside.link:active { opacity: 0.5; }
+.cat-aside-caret { color: var(--ink-ghost); margin-left: var(--s1); }
+
 /* --- Последние траты (FEAT-033) ------------------------------------------
    Не «выписка по счёту», а память: куда ушло за последние дни. Поэтому здесь
    нет ни времени, ни источника, ни статуса — только мерчант и сумма, а дата
@@ -571,6 +584,57 @@ body {
   font-size: 11px;
   opacity: 0.55;
 }
+
+/* Чип активного фильтра (FEAT-038). Первая строка блока: чем отфильтровано,
+   сколько это строк и — у категории — то самое число, по которому тапнули.
+   Живёт ВНУТРИ блока, а не в его шапке: место справа в шапке занято
+   «скрыть/показать», а после автоскролла шапка категорий уже за экраном,
+   и подсветка строки там перестаёт работать выходом.
+
+   Вид — служебная надпись на полях, как .tx-day, но с линией снизу: она
+   отделяет контракт от строк, которые он описывает. */
+.tx-chip {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s2) 0 var(--s3);
+  border-bottom: 1px solid var(--rule-strong);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.tx-chip-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tx-chip-sum {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;                 /* та же маска, что у сумм категорий */
+  -webkit-tap-highlight-color: transparent;
+}
+.tx-chip-sum:active { opacity: 0.5; }
+.tx-chip-sum.masked { color: var(--ink-faint); letter-spacing: 2px; }
+
+/* Крестик — кнопка, а не глиф: у него своя область нажатия, иначе на 11px
+   в него не попасть. Поля растянуты вбок и вниз, а не размером шрифта. */
+.tx-chip-clear {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: var(--s1) 0 var(--s1) var(--s3);
+  margin: calc(-1 * var(--s1)) 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tx-chip-clear:active { opacity: 0.5; }
 
 /* Подзаголовок дня. Ведёт себя как надпись на полях: мельче строк, тише
    чернилами, без линовки — иначе спорит с границами самих строк. */
@@ -763,7 +827,7 @@ body {
 
   <!-- FEAT-033: последние траты. Свёрнуто по умолчанию; подпись справа —
        она же переключатель, она же индикатор загрузки и отказа. -->
-  <section class="tx-section">
+  <section class="tx-section" id="txSection">
     <div class="section-head">
       <span class="section-title" id="txTitle">Последние траты</span>
       <button class="section-note" id="txToggle" type="button">показать</button>
@@ -1081,16 +1145,17 @@ function paintFundSum(sum, f) {
 
 function fundRow(f) {
   var row = document.createElement('div');
-  row.className = 'fund' + (txFund === f.name ? ' picked' : '');
+  row.className = 'fund' +
+    (txFilter && txFilter.kind === 'fund' && txFilter.value === f.name ? ' picked' : '');
 
   /* FEAT-033: строка фонда фильтрует список трат под фондами. Верх экрана
      тап не трогает: perDay и шкала считаются по циклу целиком, и дёргать их
      от фильтра значило бы показать «дневной лимит фонда», которого нет. */
   row.setAttribute('role', 'button');
   row.tabIndex = 0;
-  row.addEventListener('click', function () { pickTxFund(f.name); });
+  row.addEventListener('click', function () { pickTxFilter('fund', f.name); });
   row.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickTxFund(f.name); }
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickTxFilter('fund', f.name); }
   });
 
   var name = document.createElement('span');
@@ -1198,7 +1263,13 @@ var txCycleStart = 0;
 var txErrorText  = '';
 var txExpanded   = false;
 var txShown      = TX_FIRST;
-var txFund       = null;     /* активный фильтр по фонду */
+/* Фильтр списка ОДИН на экран: { kind: 'fund' | 'cat', value: '…' } либо null.
+   Двух сразу не бывает намеренно (FEAT-038). «Фонд И категория» пусто не
+   иногда, а ПО ПОСТРОЕНИЮ: фондовые траты вырезаны из разбивки категорий ещё
+   на бэкенде, значит «Продукты + Отпуск» = ∅ всегда. Одно поле состояния —
+   и сброс тоже один, что и снимает блокер, из-за которого фильтр по категории
+   откладывали в FEAT-036. */
+var txFilter     = null;
 var txRefocus    = false;    /* вернуть фокус на «Ещё» после дорисовки */
 
 /* --- Чистые помощники (покрыты test_miniapp_tx.js) --- */
@@ -1275,9 +1346,72 @@ function txCycleSplit(items, cycleStart) {
   return -1;
 }
 
-function txFilterByFund(items, fund) {
-  if (!fund) return items;
-  return items.filter(function (it) { return it.fund === fund; });
+/* Фильтрация списка. У двух видов фильтра РАЗНЫЕ окна, и это главное в фиче.
+
+   Фонд — как было: весь загруженный хвост, цикл не важен. Человек спрашивает
+   «что я вообще брал из Отпуска», у этого вопроса нет границы по дате.
+
+   Категория — состав того числа, по которому тапнули: текущий цикл, без
+   фондовых, эта категория. Ровно то множество, из которого блок разбивки
+   сложил свои $340 (miniAppAggregateCats_ в phase16_miniapp.js). Показать
+   здесь весь хвост значило бы дать список, который с числом над ним не
+   сходится никогда и объясняется только простынёй оговорок. */
+function txFilterItems(items, filter, cycleStart) {
+  if (!filter) return items;
+
+  if (filter.kind === 'fund') {
+    return items.filter(function (it) { return it.fund === filter.value; });
+  }
+
+  return items.filter(function (it) {
+    if (it.fund) return false;                              /* фондовых в разбивке нет */
+    if (cycleStart && !(it.ts >= cycleStart)) return false; /* только текущий цикл */
+    return it.cat === filter.value;
+  });
+}
+
+/* Дотянулось ли окно списка до начала цикла. Доказательство одно: самая
+   старая загруженная трата СТАРШЕ начала цикла — значит всё, что после неё,
+   в выборке есть. Записи идут от свежих к старым, поэтому смотрим последнюю.
+
+   Без этой проверки чип обещал бы «12 трат» там, где список физически знает
+   девять, — то же враньё с уверенным лицом, от которого на бэкенде стоит
+   флаг truncated. */
+function txWindowCoversCycle(items, cycleStart) {
+  if (!cycleStart || !items || !items.length) return false;
+  var oldest = items[items.length - 1];
+  return !!(oldest && oldest.ts && oldest.ts < cycleStart);
+}
+
+/* Текст чипа. Число трат обещаем только когда окно доказано полным. */
+function txChipText(filter, count, covers) {
+  if (!filter) return '';
+  var n = count + ' ' + plural(count, 'трата', 'траты', 'трат');
+  if (filter.kind === 'fund') return filter.value + ' · из фонда · ' + n;
+  if (!covers)                return filter.value + ' · за цикл · в списке не все';
+
+  /* «0 трат» рядом с суммой $40 — противоречие в одной строке. Счёт молчит,
+     причину объясняет сообщение под чипом. */
+  if (!count) return filter.value + ' · за цикл';
+  return filter.value + ' · за цикл · ' + n;
+}
+
+/* Пустой результат обязан называть причину. «Ничего нет» здесь почти всегда
+   ложь: по категории пустота логически невозможна — раз строка в разбивке
+   есть, траты в цикле были, и единственная причина пустоты — окно списка
+   до них не достало. Прецедент тот же, что у «Депозита» ниже. */
+function txEmptyText(filter, covers) {
+  if (!filter) return 'Пока пусто.';
+
+  if (filter.kind === 'fund') {
+    return TX_NEVER_SPENT.indexOf(filter.value) !== -1
+      ? 'Из этого фонда не тратим — он на сбережения.'
+      : 'Среди последних трат по этому фонду ничего нет.';
+  }
+
+  return covers
+    ? 'Траты этой категории в цикле есть, но в список они не попали.'
+    : 'Эти траты старше окна списка — в последних загруженных записях их нет.';
 }
 
 /* --- Отрисовка блока --- */
@@ -1292,7 +1426,7 @@ function txRowNode(it) {
 
   /* Метку ставим только в общем списке: когда фильтр уже по фонду,
      она стоит у каждой строки и не значит ничего. */
-  if (it.fund && !txFund) {
+  if (it.fund && !(txFilter && txFilter.kind === 'fund')) {
     var mark = document.createElement('span');
     mark.className = 'tx-fund';
     mark.textContent = '🏦';
@@ -1355,6 +1489,54 @@ function txStateNode(text, withRetry) {
   return box;
 }
 
+/* Сумма категории для чипа — из той же разбивки, что нарисована выше: своим
+   сложением строк списка мы получили бы другое число (там валюта операции,
+   здесь доллары) и спорили бы сами с собой. У фонда суммы нет вовсе: в блоке
+   фондов число — это остаток фонда, а не сколько из него потрачено. */
+function txFilterUsd(filter) {
+  if (!filter || filter.kind !== 'cat' || !catData) return null;
+  if (filter.value === CAT_UNKNOWN) return Number(catData.unknownUsd) || 0;
+
+  var items = catData.items || [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].name === filter.value) return Number(items[i].usd) || 0;
+  }
+  return null;
+}
+
+function txChipNode(count, covers) {
+  var chip = document.createElement('div');
+  chip.className = 'tx-chip';
+
+  var text = document.createElement('span');
+  text.className = 'tx-chip-text';
+  text.textContent = txChipText(txFilter, count, covers);
+  chip.appendChild(text);
+
+  /* Сумма отдельным узлом — она подчиняется общей маске (FEAT-034). Иначе чип
+     вернул бы открытым текстом ровно то число, которое человек только что
+     спрятал тапом по соседней строке. */
+  var usd = txFilterUsd(txFilter);
+  if (usd !== null) {
+    var sum = document.createElement('span');
+    sum.className = 'tx-chip-sum' + (amountsMasked ? ' masked' : '');
+    if (amountsMasked) sum.textContent = '••••';
+    else               sum.innerHTML = moneyHtml(usd);
+    sum.addEventListener('click', toggleAmountsMask);
+    chip.appendChild(sum);
+  }
+
+  var clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'tx-chip-clear';
+  clear.setAttribute('aria-label', 'Снять фильтр');
+  clear.textContent = '✕';
+  clear.addEventListener('click', clearTxFilter);
+  chip.appendChild(clear);
+
+  return chip;
+}
+
 function renderTx() {
   var toggle = document.getElementById('txToggle');
   var title  = document.getElementById('txTitle');
@@ -1367,7 +1549,8 @@ function renderTx() {
                      : (txState === 'error' ? 'не загрузились' : 'показать');
   toggle.setAttribute('aria-expanded', txExpanded ? 'true' : 'false');
 
-  title.textContent = txFund ? 'Траты · ' + txFund : 'Последние траты';
+  /* Заголовок — единственный след фильтра, когда блок свёрнут. */
+  title.textContent = txFilter ? 'Траты · ' + txFilter.value : 'Последние траты';
 
   box.className = txExpanded ? '' : 'hidden';
   box.textContent = '';
@@ -1382,16 +1565,16 @@ function renderTx() {
     return;
   }
 
-  var list = txFilterByFund(txItems, txFund);
+  var list   = txFilterItems(txItems, txFilter, txCycleStart);
+  var covers = txWindowCoversCycle(txItems, txCycleStart);
+
+  /* Чип рисуем и при пустом результате: он объясняет, чем отфильтровано, и
+     держит выход. Убрать его вместе со строками значило бы запереть человека
+     в отфильтрованном блоке без единой кнопки назад. */
+  if (txFilter) box.appendChild(txChipNode(list.length, covers));
 
   if (!list.length) {
-    if (txFund && TX_NEVER_SPENT.indexOf(txFund) !== -1) {
-      box.appendChild(txStateNode('Из этого фонда не тратим — он на сбережения.', false));
-    } else if (txFund) {
-      box.appendChild(txStateNode('Среди последних трат по этому фонду ничего нет.', false));
-    } else {
-      box.appendChild(txStateNode('Пока пусто.', false));
-    }
+    box.appendChild(txStateNode(txEmptyText(txFilter, covers), false));
     box.appendChild(txNoteNode());
     return;
   }
@@ -1478,15 +1661,57 @@ function toggleTxSection() {
   haptic();
 }
 
-/* Тап по фонду: ставит фильтр и разворачивает блок. Повторный тап по тому же
-   фонду снимает фильтр, но блок оставляет открытым — свернуть его обратно
-   значило бы наказать за любопытство. */
-function pickTxFund(name) {
-  txFund   = (txFund === name) ? null : name;
-  txShown  = TX_FIRST;
-  txExpanded = true;
+/* Блок категорий стоит ВЫШЕ списка трат, поэтому тап по категории без скролла
+   даёт только засечку: результат уезжает под нижний край. Доводим экран до
+   заголовка блока трат — и делаем это одинаково для фонда и категории, иначе
+   один и тот же жест ведёт себя по-разному в двух соседних блоках.
+
+   Скролл мгновенный, не плавный: анимация накладывается на разворот блока
+   и на tg.expand() и в вебвью читается как рывок. */
+function scrollToTx() {
+  var el = document.getElementById('txSection');
+  if (!el) return;
+  try { el.scrollIntoView({ block: 'start', behavior: 'auto' }); }
+  catch (e) { try { el.scrollIntoView(true); } catch (e2) {} }
+}
+
+/* Перерисовать всё, что показывает активный фильтр: засечка в фондах,
+   засечка в категориях, сам список. Одна точка — иначе состояния разойдутся,
+   как уже расходились у маски сумм. */
+function repaintFilter() {
   renderFunds(lastData && lastData.funds ? lastData.funds : []);
+  renderCats();
   renderTx();
+}
+
+/* Тап по фонду или по категории: ставит фильтр и разворачивает блок трат.
+   Повторный тап по той же строке снимает фильтр, но блок оставляет открытым —
+   свернуть его обратно значило бы наказать за любопытство.
+
+   Фильтр один: выбор категории молча снимает фонд и наоборот. Отдельного
+   уведомления об этом нет намеренно — заголовок и чип меняются в тот же кадр,
+   плюс haptic, а всплывашка ради обратимого тапа была бы шумом. */
+function pickTxFilter(kind, value) {
+  var same = txFilter && txFilter.kind === kind && txFilter.value === value;
+
+  txFilter   = same ? null : { kind: kind, value: value };
+  txShown    = TX_FIRST;   /* иначе новый фильтр открылся бы сразу на 40 строк */
+  txRefocus  = false;
+  txExpanded = true;
+
+  repaintFilter();
+  scrollToTx();
+  haptic();
+}
+
+/* Крестик в чипе. Скролла здесь нет: человек уже стоит в блоке трат, и
+   доводка экрана дёрнула бы страницу без нужды. */
+function clearTxFilter(ev) {
+  if (ev) ev.stopPropagation();
+  txFilter  = null;
+  txShown   = TX_FIRST;
+  txRefocus = false;
+  repaintFilter();
   haptic();
 }
 
@@ -1505,6 +1730,14 @@ function pickTxFund(name) {
    =========================================================================== */
 
 var CAT_FIRST = 6;           /* сколько строк видно сразу */
+
+/* Имя строки «без категории». Зеркало ANALYTICS_UNKNOWN_CATEGORY из
+   phase4_analytics.js: бэкенд нормализует к нему и разбивку, и категорию
+   каждой траты, поэтому фильтр по нему — обычное равенство строк, без
+   отдельной ветки. Продублировано осознанно, как TX_NEVER_SPENT: это текст
+   экрана. Разойдётся — фильтр «Без категории» отдаст пустоту, и тест
+   сверки в test_miniapp_cats.js это поймает. */
+var CAT_UNKNOWN = 'Не определено';
 
 var catData     = null;      /* объект cats из ответа part=tx */
 var catExpanded = false;     /* разворот блока — как у фондов, между запусками не помним */
@@ -1579,12 +1812,31 @@ function catStateNode(text, withRetry) {
   return box;
 }
 
-function catAsideNode(label, usd, first) {
+/* pick — имя фильтра, если строка тапабельная, иначе null. Две строки хвоста
+   выглядят одинаково, а ведут себя по-разному, поэтому у тапабельной есть
+   видимая засечка ›  — без неё пришлось бы объяснять словами, почему одна
+   нажимается, а вторая нет. */
+function catAsideNode(label, usd, first, pick) {
   var row = document.createElement('div');
-  row.className = 'cat-aside' + (first ? ' first' : '');
+  row.className = 'cat-aside' + (first ? ' first' : '') + (pick ? ' link' : '') +
+    (pick && txFilter && txFilter.kind === 'cat' && txFilter.value === pick ? ' picked' : '');
 
   var name = document.createElement('span');
   name.textContent = label;
+
+  if (pick) {
+    var caret = document.createElement('span');
+    caret.className = 'cat-aside-caret';
+    caret.textContent = '›';
+    name.appendChild(caret);
+
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.addEventListener('click', function () { pickTxFilter('cat', pick); });
+    row.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickTxFilter('cat', pick); }
+    });
+  }
 
   var sum = document.createElement('span');
   sum.className = 'cat-aside-sum';
@@ -1599,7 +1851,18 @@ function catAsideNode(label, usd, first) {
 
 function catRow(item, total) {
   var row = document.createElement('div');
-  row.className = 'cat';
+  row.className = 'cat' +
+    (txFilter && txFilter.kind === 'cat' && txFilter.value === item.name ? ' picked' : '');
+
+  /* FEAT-038: строка категории фильтрует список трат под блоком — тем же
+     жестом, что и строка фонда. Верх экрана тап не трогает: perDay и шкала
+     считаются по циклу целиком, «дневного лимита категории» не существует. */
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  row.addEventListener('click', function () { pickTxFilter('cat', item.name); });
+  row.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickTxFilter('cat', item.name); }
+  });
 
   var head = document.createElement('div');
   head.className = 'cat-head';
@@ -1611,9 +1874,9 @@ function catRow(item, total) {
   /* Суммы категорий скрываются тем же общим флагом, что и суммы фондов
      (FEAT-034): иначе спрятал фонды, а рядом открытым текстом лежит, сколько
      ушло на продукты — маска перестаёт делать то, ради чего сделана.
-     Тап по самой сумме переключает маску (BUG-027) — единственный жест
-     внутри блока в v1. Фильтр по категории по-прежнему не вводим: он
-     требует общей кнопки сброса на оба фильтра. */
+     Тап по самой сумме переключает маску (BUG-027) — свой таргет внутри
+     строки, всплытие гасит сам toggleAmountsMask, поэтому фильтр на строке
+     (FEAT-038) с ним не спорит. */
   var sum = document.createElement('span');
   sum.className = 'cat-sum' + (amountsMasked ? ' masked' : '');
   if (amountsMasked) sum.textContent = '••••';
@@ -1744,14 +2007,20 @@ function renderCats() {
   }
 
   /* Фондовые траты и «Не определено» — не категории, поэтому отдельными
-     строками под разбивкой, а не в общем ряду. */
+     строками под разбивкой, а не в общем ряду.
+
+     «Из фондов» НЕ тапается: то же множество уже достижимо тапом по фонду,
+     но с другим окном (весь хвост против текущего цикла). Два разных ответа
+     на один вопрос убивают доверие к экрану быстрее, чем отсутствие второго
+     жеста. «Без категории» тапается — это единственный список, с которым
+     человек что-то сделает: пойдёт в бота и проставит категории. */
   var asideFirst = true;
   if (catData.fundUsd) {
-    box.appendChild(catAsideNode('Из фондов', catData.fundUsd, asideFirst));
+    box.appendChild(catAsideNode('Из фондов', catData.fundUsd, asideFirst, null));
     asideFirst = false;
   }
   if (catData.unknownUsd) {
-    box.appendChild(catAsideNode('Без категории', catData.unknownUsd, asideFirst));
+    box.appendChild(catAsideNode('Без категории', catData.unknownUsd, asideFirst, CAT_UNKNOWN));
     asideFirst = false;
   }
 
