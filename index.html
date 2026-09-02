@@ -1262,6 +1262,7 @@ var txState      = 'idle';   /* idle | loading | ready | error */
 var txItems      = [];
 var txCycleStart = 0;
 var txErrorText  = '';
+var txSlow       = false;   /* загрузка затянулась — сказать об этом словами */
 var txExpanded   = false;
 var txShown      = TX_FIRST;
 /* Фильтр списка ОДИН на экран: { kind: 'fund' | 'cat', value: '…' } либо null.
@@ -1471,6 +1472,14 @@ function txRowNode(it) {
   return row;
 }
 
+/* Пока ждём — говорим, чего ждём. Молчаливое «Загружаю…» на сороковой секунде
+   неотличимо от зависания, а причина ожидания у нас известна и не страшная. */
+function loadingText() {
+  return txSlow
+    ? 'Загружаю… Apps Script просыпается: после обновления первый ответ идёт до минуты.'
+    : 'Загружаю…';
+}
+
 function txStateNode(text, withRetry) {
   var box = document.createElement('div');
   box.className = 'tx-state';
@@ -1558,7 +1567,7 @@ function renderTx() {
   if (!txExpanded) return;
 
   if (txState === 'loading' || txState === 'idle') {
-    box.appendChild(txStateNode('Загружаю…', false));
+    box.appendChild(txStateNode(loadingText(), false));
     return;
   }
   if (txState === 'error') {
@@ -2011,7 +2020,7 @@ function renderCats() {
   if (!catExpanded) return;
 
   if (txState === 'loading' || txState === 'idle') {
-    box.appendChild(catStateNode('Загружаю…', false));
+    box.appendChild(catStateNode(loadingText(), false));
     return;
   }
   if (txState === 'error') {
@@ -2152,6 +2161,7 @@ function toggleCatSection() {
    prefetch, и мы бы о нём не узнали. */
 function loadTx() {
   txState = 'loading';
+  txSlow  = false;
   renderTx();
   renderCats();
 
@@ -2184,6 +2194,11 @@ function loadTx() {
     txState = 'error';
     txErrorText = kind === 'timeout' ? 'Ответа не дождались.'
                                      : 'Данные не загрузились.';
+    renderTx();
+    renderCats();
+
+  }, function () {
+    txSlow = true;      /* подпись в обоих блоках, загрузку не прерываем */
     renderTx();
     renderCats();
   });
@@ -2254,20 +2269,42 @@ function showSetup(currentUrl) {
 
 var jsonpSeq = 0;
 
-function jsonp(url, params, onDone, onFail) {
+/* Потолок ожидания (BUG-029). Был 15 с — и это оказалось меньше, чем честная
+   работа бэкенда. Замеры по журналу выполнений 02.09.2026: обычный `part=tx`
+   идёт 2–3 с, но на холодном контейнере или непересчитанном листе — 9,7 / 12,6 /
+   17,0 с, а первое выполнение после публикации новой версии (компиляция ~500 КБ
+   кода) — 45,7 с. Все они завершались УСПЕШНО: страница отваливалась от рабочего
+   ответа и показывала «не загрузились» там, где надо было просто подождать.
+
+   Повтор вместо ожидания рассматривался и отклонён: брошенное выполнение на
+   стороне Apps Script всё равно доработает до конца, и повтор просто запустит
+   второе такое же — двойной расход квоты ради того, что и так приедет.
+
+   45 с закрывает и холодный старт, и худший замер с запасом. Настоящий обрыв
+   связи столько не ждут — его ловит script.onerror, он срабатывает сразу. */
+var JSONP_TIMEOUT_MS = 45000;
+
+/* Когда сказать вслух, что это надолго. 9 с — выше обычных 2–3 с, поэтому на
+   штатной загрузке подпись не мелькает, но заметно раньше потолка: молчащий
+   «Загружаю…» на сороковой секунде читается как зависание. */
+var JSONP_SLOW_MS = 9000;
+
+function jsonp(url, params, onDone, onFail, onSlow) {
   var name = 'miniappCb' + (++jsonpSeq) + '_' + Date.now();
   var script = document.createElement('script');
-  var timer;
+  var timer, slowTimer;
 
   function cleanup() {
     clearTimeout(timer);
+    clearTimeout(slowTimer);
     try { delete window[name]; } catch (e) { window[name] = undefined; }
     if (script.parentNode) script.parentNode.removeChild(script);
   }
 
   window[name] = function (data) { cleanup(); onDone(data); };
 
-  timer = setTimeout(function () { cleanup(); onFail('timeout'); }, 15000);
+  timer = setTimeout(function () { cleanup(); onFail('timeout'); }, JSONP_TIMEOUT_MS);
+  if (onSlow) slowTimer = setTimeout(onSlow, JSONP_SLOW_MS);
   script.onerror = function () { cleanup(); onFail('network'); };
 
   var qs = ['action=miniapp', 'callback=' + name];
@@ -2366,6 +2403,12 @@ function load() {
     if (cached) render(cached, true);
     txFailMain(kind === 'timeout' ? 'Ответа не дождались.'
                                   : 'Данные не загрузились.');
+
+  }, function () {
+    /* Основной запрос затянулся. Плашку не показываем — это не отказ, а
+       ожидание; говорим тихо, в подвале, где и так живёт отметка времени. */
+    var stamp = document.getElementById('stamp');
+    if (stamp) stamp.textContent = 'Apps Script просыпается…';
   });
 }
 
