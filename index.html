@@ -358,6 +358,137 @@ body {
 }
 .fund-more[aria-expanded="true"] .fund-caret { transform: rotate(180deg); }
 
+/* --- Категории за цикл (FEAT-036) ----------------------------------------
+   Круговая диаграмма рассматривалась и отклонена: на 310px полезной ширины
+   она требует легенды из 6-10 строк, то есть всё равно рисует список, а
+   сегменты по 3-5% меньше 44px и не тапаются. Заливки шестью цветами ввели
+   бы второй язык в макет, где нет ни одной тени. Здесь тот же приём, что
+   в шкале отклонения: волосяная полоса чернилами по линовке.
+
+   Период — зарплатный цикл, не календарный месяц: им живёт весь экран
+   (дневной лимит, дни до ЗП, разделитель в списке трат). Два разных
+   «периода» на одном экране расходились бы молча.
+   ------------------------------------------------------------------------ */
+.cat-section { margin-top: var(--s8); }
+
+/* Шапка блока: сумма за период крупно, рядом — на каком дне цикла она набрана.
+   Без второго числа первое не значит ничего: $1 240 на 5-й день и на 28-й —
+   разные новости. */
+.cat-lead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) 0 var(--s3);
+}
+.cat-total {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+.cat-total.masked { color: var(--ink-faint); letter-spacing: 2px; }
+.cat-day { font-size: 11px; color: var(--ink-faint); text-align: right; }
+
+/* Дельта к тому же отрезку прошлого цикла. Именно к отрезку равной длины:
+   сравнение с полным прошлым циклом на 12-й день показало бы «−58%» там,
+   где идёт перерасход. Больше трат — красные чернила, меньше — зелёная
+   линовка; те же два цвета, что на шкале отклонения наверху. */
+.cat-vs {
+  font-size: 11px;
+  color: var(--ink-faint);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+.cat-vs .up   { color: var(--brick);  font-weight: 500; }
+.cat-vs .down { color: var(--ledger); font-weight: 500; }
+
+.cat {
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.cat:last-child { border-bottom: none; }
+
+.cat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+.cat-name {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cat-sum {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.cat-sum.masked { color: var(--ink-faint); letter-spacing: 2px; }
+
+/* Полоса и проценты — одной строкой под именем: три строки на категорию
+   растянули бы блок на пол-экрана. */
+.cat-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.cat-bar {
+  flex: 1;
+  min-width: 0;
+  height: 2px;                 /* волосяная линия, не столбик */
+  background: var(--rule);
+}
+.cat-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--ink-soft);
+}
+.cat-share {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ink-faint);
+  min-width: 30px;
+  text-align: right;
+}
+.cat-delta {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  min-width: 46px;
+  text-align: right;
+}
+.cat-delta.up   { color: var(--brick);  }
+.cat-delta.down { color: var(--ledger); }
+.cat-delta.flat { color: var(--ink-ghost); }
+
+/* Хвост блока: фондовые траты и «Не определено». Обе строки — не категории,
+   и стоять в общем ряду не должны. Фондовые в разбивку не входят вовсе
+   (так же считает бот: Остаток = Счета − Фонды), поэтому без этой строки
+   сумма блока молча не сошлась бы со списком трат под ним. */
+.cat-aside {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: var(--s2);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.cat-aside-sum {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+.cat-aside.first { margin-top: var(--s4); }
+
 /* --- Последние траты (FEAT-033) ------------------------------------------
    Не «выписка по счёту», а память: куда ушло за последние дни. Поэтому здесь
    нет ни времени, ни источника, ни статуса — только мерчант и сумма, а дата
@@ -590,6 +721,18 @@ body {
     <div id="funds"></div>
   </section>
 
+  <!-- FEAT-036: траты по категориям за текущий зарплатный цикл. Стоит МЕЖДУ
+       фондами и списком трат: категории — обобщение, список — детализация
+       того же периода. Данные приходят тем же запросом part=tx, что и список,
+       поэтому состояние загрузки у блоков общее. -->
+  <section class="cat-section">
+    <div class="section-head">
+      <span class="section-title" id="catTitle">Категории</span>
+      <button class="section-note" id="catToggle" type="button">показать</button>
+    </div>
+    <div id="catBody" class="hidden"></div>
+  </section>
+
   <!-- FEAT-033: последние траты. Свёрнуто по умолчанию; подпись справа —
        она же переключатель, она же индикатор загрузки и отказа. -->
   <section class="tx-section">
@@ -757,6 +900,7 @@ function render(data, isStale) {
   renderCurNote();
   renderTx();   /* сам список от валюты экрана не зависит — перерисовываем ради
                    заголовка с фильтром и подписи «показать/скрыть» */
+  renderCats(); /* а вот суммы категорий — в валюте экрана, их пересчитать надо */
 
   document.getElementById('stamp').textContent =
     (isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt);
@@ -909,6 +1053,7 @@ function fundRow(f) {
     ev.stopPropagation();
     fundsMasked = !fundsMasked;
     renderFunds(lastData && lastData.funds ? lastData.funds : []);
+    renderCats();   /* суммы категорий под тем же общим флагом (FEAT-036) */
     haptic();
   });
 
@@ -1287,7 +1432,286 @@ function pickTxFund(name) {
   haptic();
 }
 
-/* Отдельный запрос, фоном, после того как экран уже нарисован. В localStorage
+/* ===========================================================================
+   FEAT-036 — КАТЕГОРИИ ЗА ЦИКЛ
+
+   Данные приезжают тем же ответом part=tx, что и список трат, поэтому
+   состояние загрузки у блоков ОБЩЕЕ (txState): одна загрузка, один отказ,
+   одна кнопка «Повторить». Второй эндпоинт дал бы второй загрузчик и второе
+   место, где что-то может тихо не приехать.
+
+   Суммы здесь — в валюте экрана и подчиняются тапу по валюте (FEAT-031),
+   в отличие от списка трат ниже, где стоит валюта операции. Разница
+   намеренная и названа словами в сноске блока: сложить лари с рублями
+   в один столбик нельзя, а сумма отдельной операции — факт, а не оценка.
+   =========================================================================== */
+
+var CAT_FIRST = 6;           /* сколько строк видно сразу */
+
+var catData     = null;      /* объект cats из ответа part=tx */
+var catExpanded = false;     /* разворот блока — как у фондов, между запусками не помним */
+var catAll      = false;     /* показаны все категории или первые CAT_FIRST */
+
+/* --- Чистые помощники (покрыты test_miniapp_cats.js) --- */
+
+/* Доля категории в тратах периода. Округляем до целого: десятые доли
+   процента на волосяной полосе всё равно неразличимы. */
+function catShare(usd, total) {
+  if (!total) return 0;
+  return Math.round((Number(usd) || 0) / total * 100);
+}
+
+/* Дельта к тому же отрезку прошлого цикла, в процентах.
+   Прошлого нет (новая категория) → null: «+100%» от нуля — не рост,
+   а деление на ноль с уверенным лицом. */
+function catDelta(usd, prevUsd) {
+  var prev = Number(prevUsd) || 0;
+  if (prev <= 0) return null;
+  return Math.round(((Number(usd) || 0) - prev) / prev * 100);
+}
+
+/* Порог, ниже которого дельту считаем шумом: округление сумм в долларах
+   само по себе даёт единицы процентов. */
+function catDeltaClass(pct) {
+  if (pct === null) return 'flat';
+  if (pct >= 3)  return 'up';     /* тратим больше — красные чернила */
+  if (pct <= -3) return 'down';   /* тратим меньше — зелёная линовка */
+  return 'flat';
+}
+
+function catDeltaText(pct) {
+  if (pct === null) return '';
+  if (pct > 0)  return '+' + pct + '%';
+  if (pct < 0)  return MINUS + Math.abs(pct) + '%';
+  return '0%';
+}
+
+function catDayText(dayIndex, dayTotal) {
+  return 'день ' + dayIndex + ' из ' + dayTotal;
+}
+
+/* Строка сравнения под итогом. Пишем словами, а не одним числом со стрелкой:
+   «+8%» без указания, к чему, читается как «за день» или «к плану». */
+function catVsText(pct, dayIndex) {
+  if (pct === null) return 'Не с чем сравнить: за тот же отрезок прошлого цикла трат нет.';
+  var dayPart = 'к ' + dayIndex + '-му дню прошлого цикла';
+  if (pct === 0)  return 'Столько же, сколько ' + dayPart + '.';
+  if (pct > 0)    return 'На ' + pct + '% больше, чем ' + dayPart + '.';
+  return 'На ' + Math.abs(pct) + '% меньше, чем ' + dayPart + '.';
+}
+
+/* --- Отрисовка --- */
+
+function catStateNode(text, withRetry) {
+  var box = document.createElement('div');
+  box.className = 'tx-state';        /* тот же служебный вид, что у списка трат */
+
+  var msg = document.createElement('div');
+  msg.textContent = text;
+  box.appendChild(msg);
+
+  if (withRetry) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = '↻ Повторить';
+    btn.addEventListener('click', loadTx);
+    box.appendChild(btn);
+  }
+  return box;
+}
+
+function catAsideNode(label, usd, first) {
+  var row = document.createElement('div');
+  row.className = 'cat-aside' + (first ? ' first' : '');
+
+  var name = document.createElement('span');
+  name.textContent = label;
+
+  var sum = document.createElement('span');
+  sum.className = 'cat-aside-sum';
+  if (fundsMasked) sum.textContent = '••••';
+  else             sum.textContent = money(usd);
+
+  row.appendChild(name);
+  row.appendChild(sum);
+  return row;
+}
+
+function catRow(item, total) {
+  var row = document.createElement('div');
+  row.className = 'cat';
+
+  var head = document.createElement('div');
+  head.className = 'cat-head';
+
+  var name = document.createElement('span');
+  name.className = 'cat-name';
+  name.textContent = item.name;      /* имя категории из таблицы — только textContent */
+
+  /* Суммы категорий скрываются тем же общим флагом, что и суммы фондов
+     (FEAT-034): иначе спрятал фонды, а рядом открытым текстом лежит, сколько
+     ушло на продукты — маска перестаёт делать то, ради чего сделана.
+     Своего тап-жеста строка не получает: в v1 внутри блока ничего
+     не кликается, чтобы не плодить второй фильтр без общего сброса. */
+  var sum = document.createElement('span');
+  sum.className = 'cat-sum' + (fundsMasked ? ' masked' : '');
+  if (fundsMasked) sum.textContent = '••••';
+  else             sum.innerHTML = moneyHtml(item.usd);
+
+  head.appendChild(name);
+  head.appendChild(sum);
+
+  var line = document.createElement('div');
+  line.className = 'cat-line';
+
+  var share = catShare(item.usd, total);
+
+  var bar = document.createElement('span');
+  bar.className = 'cat-bar';
+  var fill = document.createElement('i');
+  fill.style.width = Math.max(share, 1) + '%';   /* 1% — чтобы линия не исчезала совсем */
+  bar.appendChild(fill);
+
+  var shareNode = document.createElement('span');
+  shareNode.className = 'cat-share';
+  shareNode.textContent = share + '%';
+
+  var pct = catDelta(item.usd, item.prevUsd);
+  var delta = document.createElement('span');
+  delta.className = 'cat-delta ' + catDeltaClass(pct);
+  delta.textContent = catDeltaText(pct);
+
+  line.appendChild(bar);
+  line.appendChild(shareNode);
+  line.appendChild(delta);
+
+  row.appendChild(head);
+  row.appendChild(line);
+  return row;
+}
+
+function renderCats() {
+  var toggle = document.getElementById('catToggle');
+  var box    = document.getElementById('catBody');
+  if (!toggle || !box) return;
+
+  /* Подпись справа — единственное место, где отказ виден, пока блок свёрнут.
+     Ровно та же логика, что у списка трат: молчащий блок читается как
+     «трат просто нет». */
+  toggle.textContent = catExpanded ? 'скрыть'
+                     : (txState === 'error' ? 'не загрузились' : 'показать');
+  toggle.setAttribute('aria-expanded', catExpanded ? 'true' : 'false');
+
+  box.className = catExpanded ? '' : 'hidden';
+  box.textContent = '';
+  if (!catExpanded) return;
+
+  if (txState === 'loading' || txState === 'idle') {
+    box.appendChild(catStateNode('Загружаю…', false));
+    return;
+  }
+  if (txState === 'error') {
+    box.appendChild(catStateNode(txErrorText || 'Категории не загрузились.', true));
+    return;
+  }
+  if (!catData) {
+    box.appendChild(catStateNode('Разбивку посчитать не удалось.', true));
+    return;
+  }
+
+  var total = Number(catData.totalUsd) || 0;
+
+  /* Шапка: сколько потрачено и на каком дне цикла. */
+  var lead = document.createElement('div');
+  lead.className = 'cat-lead';
+
+  var totalNode = document.createElement('span');
+  totalNode.className = 'cat-total' + (fundsMasked ? ' masked' : '');
+  if (fundsMasked) totalNode.textContent = '••••';
+  else             totalNode.innerHTML = moneyHtml(total);
+
+  var dayNode = document.createElement('span');
+  dayNode.className = 'cat-day';
+  dayNode.textContent = catDayText(catData.dayIndex, catData.dayTotal);
+
+  lead.appendChild(totalNode);
+  lead.appendChild(dayNode);
+  box.appendChild(lead);
+
+  var vs = document.createElement('div');
+  vs.className = 'cat-vs';
+  vs.textContent = catVsText(catDelta(total, catData.prevTotalUsd), catData.dayIndex);
+  box.appendChild(vs);
+
+  var items = catData.items || [];
+
+  if (!items.length) {
+    box.appendChild(catStateNode(total ? 'Все траты цикла — из фондов.' : 'В этом цикле трат ещё нет.', false));
+  }
+
+  var visible = catAll ? items : items.slice(0, CAT_FIRST);
+  visible.forEach(function (it) { box.appendChild(catRow(it, total)); });
+
+  /* Остальные категории раскрываем РАЗОМ, а не ступенями: их всего десять
+     (04_data_model §5), и вторая бесконечная кнопка «Ещё» на одном экране
+     с такой же кнопкой под тратами читалась бы как одна и та же. */
+  if (items.length > CAT_FIRST) {
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'fund-more';
+    more.setAttribute('aria-expanded', catAll ? 'true' : 'false');
+
+    var left = items.length - CAT_FIRST;
+    var label = document.createElement('span');
+    label.textContent = catAll ? 'Свернуть' : 'Ещё ' + left + ' ' +
+      plural(left, 'категория', 'категории', 'категорий');
+
+    var caret = document.createElement('span');
+    caret.className = 'fund-caret';
+    caret.textContent = '▾';
+
+    more.appendChild(label);
+    more.appendChild(caret);
+    more.addEventListener('click', function () {
+      catAll = !catAll;
+      renderCats();
+      haptic();
+    });
+    box.appendChild(more);
+  }
+
+  /* Фондовые траты и «Не определено» — не категории, поэтому отдельными
+     строками под разбивкой, а не в общем ряду. */
+  var asideFirst = true;
+  if (catData.fundUsd) {
+    box.appendChild(catAsideNode('Из фондов', catData.fundUsd, asideFirst));
+    asideFirst = false;
+  }
+  if (catData.unknownUsd) {
+    box.appendChild(catAsideNode('Без категории', catData.unknownUsd, asideFirst));
+    asideFirst = false;
+  }
+
+  var note = document.createElement('div');
+  note.className = 'tx-note';
+  note.textContent = catData.truncated
+    ? 'Период показан не целиком: в окно последних трат уместилась не вся история цикла. Суммы могут быть занижены.'
+    : 'Фондовые траты в разбивку не входят — они не бьют по дневному бюджету. Суммы здесь в валюте экрана, в отличие от списка трат ниже.';
+  box.appendChild(note);
+}
+
+function toggleCatSection() {
+  catExpanded = !catExpanded;
+  renderCats();
+  haptic();
+}
+
+/* Тексты отказа здесь НЕЙТРАЛЬНЫЕ («данные», не «список трат»): причина одна
+   на оба блока, и в блоке категорий сообщение про список трат читалось бы как
+   чужое, попавшее не в своё окно.
+
+   Отдельный запрос, фоном, после того как экран уже нарисован. В localStorage
    НЕ кладём: кеш там держит числа для холодного старта, а список трат — вещь
    второстепенная, ради неё раздувать сохранённый payload незачем.
 
@@ -1297,34 +1721,53 @@ function pickTxFund(name) {
 function loadTx() {
   txState = 'loading';
   renderTx();
+  renderCats();
 
   var initData = tg && tg.initData ? tg.initData : '';
 
   jsonp(API_URL, { initData: initData, part: 'tx' }, function (data) {
     if (data && data.error) {
       txState = 'error';
-      txErrorText = reasonMessage(data.reason).title + '. Траты не загрузились.';
+      txErrorText = reasonMessage(data.reason).title + '. Данные не загрузились.';
       renderTx();
+      renderCats();
       return;
     }
     if (!data || !data.tx) {
       txState = 'error';
-      txErrorText = 'Apps Script ответил, но трат не прислал.';
+      txErrorText = 'Apps Script ответил, но данных не прислал.';
       renderTx();
+      renderCats();
       return;
     }
 
     txItems      = data.tx;
     txCycleStart = Number(data.cycleStart) || 0;
+    catData      = data.cats || null;    /* FEAT-036: разбивка тем же ответом */
     txState      = 'ready';
     renderTx();
+    renderCats();
 
   }, function (kind) {
     txState = 'error';
-    txErrorText = kind === 'timeout' ? 'Список трат не дождались.'
-                                     : 'Список трат не загрузился.';
+    txErrorText = kind === 'timeout' ? 'Ответа не дождались.'
+                                     : 'Данные не загрузились.';
     renderTx();
+    renderCats();
   });
+}
+
+/* BUG-026. Отказ ОСНОВНОГО запроса обязан гасить и блок трат: loadTx() зовётся
+   только из ветки успеха, поэтому без этого txState оставался 'idle' — подпись
+   блока говорила «показать», как при нормальных данных, а внутри бессрочно
+   висело «Загружаю…» без кнопки повтора. Никто в этот момент ничего не грузил.
+   Плашка ошибки сверху видна, так что отказ не был тихим, но блок сообщал
+   о состоянии, которого нет, и не давал из него выхода. */
+function txFailMain(text) {
+  txState     = 'error';
+  txErrorText = text;
+  renderTx();
+  renderCats();   /* блоки едут одним запросом — и гаснут вместе */
 }
 
 /* --- Сообщения ------------------------------------------------------------ */
@@ -1458,10 +1901,12 @@ function load() {
       showError(m.title, m.body, m.alarm);
       var cached = readCache();
       if (cached) render(cached, true);
+      txFailMain(m.title + '. Данные не загрузились.');
       return;
     }
     if (!data || typeof data.perDay === 'undefined') {
       showError('Пустой ответ', 'Apps Script ответил, но данных не прислал.', true);
+      txFailMain('Apps Script ответил, но данных не прислал.');
       return;
     }
 
@@ -1487,6 +1932,8 @@ function load() {
       false
     );
     if (cached) render(cached, true);
+    txFailMain(kind === 'timeout' ? 'Ответа не дождались.'
+                                  : 'Данные не загрузились.');
   });
 }
 
@@ -1508,6 +1955,7 @@ function load() {
   document.getElementById('curNote').addEventListener('click', cycleCurrency);
 
   document.getElementById('txToggle').addEventListener('click', toggleTxSection);
+  document.getElementById('catToggle').addEventListener('click', toggleCatSection);
 
   var saved = localStorage.getItem(LS_URL);
   if (saved) API_URL = saved;
