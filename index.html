@@ -1266,13 +1266,27 @@ var txSlow       = false;   /* загрузка затянулась — ска�
 var txExpanded   = false;
 var txShown      = TX_FIRST;
 /* Фильтр списка ОДИН на экран: { kind: 'fund' | 'cat', value: '…' } либо null.
-   Двух сразу не бывает намеренно (FEAT-038). «Фонд И категория» пусто не
-   иногда, а ПО ПОСТРОЕНИЮ: фондовые траты вырезаны из разбивки категорий ещё
-   на бэкенде, значит «Продукты + Отпуск» = ∅ всегда. Одно поле состояния —
-   и сброс тоже один, что и снимает блокер, из-за которого фильтр по категории
-   откладывали в FEAT-036. */
+   Двух независимых не бывает намеренно (FEAT-038): фондовые траты вырезаны
+   из разбивки ЦИКЛА ещё на бэкенде, значит «Продукты (за цикл) + Отпуск» = ∅
+   по построению. Одно поле состояния — и сброс тоже один.
+
+   BUG-031: у фильтра по фонду есть УТОЧНЕНИЕ категорией — { kind: 'fund',
+   value: 'Отпуск', cat: 'Кафе' }. Это не второй фильтр, а сужение первого:
+   блок категорий при выбранном фонде показывает разбивку ЭТОГО фонда (из тех
+   же строк, что в списке), и тап по её строке сужает список до «фонд +
+   категория». Пусто тут быть не может — строка в разбивке есть ровно потому,
+   что такие траты в списке лежат. Крестик снимает всё разом. */
 var txFilter     = null;
 var txRefocus    = false;    /* вернуть фокус на «Ещё» после дорисовки */
+
+/* Категория с засечкой: либо сам фильтр по категории, либо уточнение внутри
+   фильтра по фонду. Одна точка — иначе строки блока проверяли бы два поля
+   каждая по-своему. */
+function pickedCat(filter) {
+  if (!filter) return null;
+  if (filter.kind === 'cat') return filter.value;
+  return filter.cat || null;
+}
 
 /* --- Чистые помощники (покрыты test_miniapp_tx.js) --- */
 
@@ -1357,12 +1371,18 @@ function txCycleSplit(items, cycleStart) {
    фондовых, эта категория. Ровно то множество, из которого блок разбивки
    сложил свои $340 (miniAppAggregateCats_ в phase16_miniapp.js). Показать
    здесь весь хвост значило бы дать список, который с числом над ним не
-   сходится никогда и объясняется только простынёй оговорок. */
+   сходится никогда и объясняется только простынёй оговорок.
+
+   Фонд + категория (BUG-031) — окно фонда, суженное категорией: та же
+   разбивка фонда над списком считается из этих же строк (catFundItems). */
 function txFilterItems(items, filter, cycleStart) {
   if (!filter) return items;
 
   if (filter.kind === 'fund') {
-    return items.filter(function (it) { return it.fund === filter.value; });
+    return items.filter(function (it) {
+      if (it.fund !== filter.value) return false;
+      return !filter.cat || it.cat === filter.cat;
+    });
   }
 
   return items.filter(function (it) {
@@ -1389,7 +1409,9 @@ function txWindowCoversCycle(items, cycleStart) {
 function txChipText(filter, count, covers) {
   if (!filter) return '';
   var n = count + ' ' + plural(count, 'трата', 'траты', 'трат');
-  if (filter.kind === 'fund') return filter.value + ' · из фонда · ' + n;
+  if (filter.kind === 'fund') {
+    return filter.value + (filter.cat ? ' · ' + filter.cat : '') + ' · из фонда · ' + n;
+  }
   if (!covers)                return filter.value + ' · за цикл · в списке не все';
 
   /* «0 трат» рядом с суммой $40 — противоречие в одной строке. Счёт молчит,
@@ -1406,6 +1428,7 @@ function txEmptyText(filter, covers) {
   if (!filter) return 'Пока пусто.';
 
   if (filter.kind === 'fund') {
+    if (filter.cat) return 'По этой категории из фонда среди последних трат ничего нет.';
     return TX_NEVER_SPENT.indexOf(filter.value) !== -1
       ? 'Из этого фонда не тратим — он на сбережения.'
       : 'Среди последних трат по этому фонду ничего нет.';
@@ -1539,12 +1562,31 @@ function txStateNode(text, withRetry) {
   return box;
 }
 
-/* Сумма категории для чипа — из той же разбивки, что нарисована выше: своим
-   сложением строк списка мы получили бы другое число (там валюта операции,
-   здесь доллары) и спорили бы сами с собой. У фонда суммы нет вовсе: в блоке
-   фондов число — это остаток фонда, а не сколько из него потрачено. */
-function txFilterUsd(filter) {
-  if (!filter || filter.kind !== 'cat' || !catData) return null;
+/* Сумма для чипа.
+
+   Категория — из той же разбивки, что нарисована выше: своим сложением строк
+   списка мы получили бы другое число (там валюта операции, здесь доллары) и
+   спорили бы сами с собой.
+
+   Фонд (BUG-031) — сумма отфильтрованных строк в долларах: ровно то число,
+   которое стоит итогом в разбивке фонда над списком, оба считаются из одного
+   множества. Пока бэкенд не кладёт usd в строки — суммы нет, чип молчит:
+   ноль на месте неизвестного числа — то же враньё с уверенным лицом. */
+function txFilterUsd(filter, list) {
+  if (!filter) return null;
+
+  if (filter.kind === 'fund') {
+    if (!list || !list.length) return null;
+    var sum = 0, seen = false;
+    for (var k = 0; k < list.length; k++) {
+      if (typeof list[k].usd !== 'number') continue;
+      seen = true;
+      if (list[k].usd > 0) sum += list[k].usd;
+    }
+    return seen ? sum : null;
+  }
+
+  if (!catData) return null;
   if (filter.value === CAT_UNKNOWN) return Number(catData.unknownUsd) || 0;
 
   var items = catData.items || [];
@@ -1554,19 +1596,19 @@ function txFilterUsd(filter) {
   return null;
 }
 
-function txChipNode(count, covers) {
+function txChipNode(list, covers) {
   var chip = document.createElement('div');
   chip.className = 'tx-chip';
 
   var text = document.createElement('span');
   text.className = 'tx-chip-text';
-  text.textContent = txChipText(txFilter, count, covers);
+  text.textContent = txChipText(txFilter, list.length, covers);
   chip.appendChild(text);
 
   /* Сумма отдельным узлом — она подчиняется общей маске (FEAT-034). Иначе чип
      вернул бы открытым текстом ровно то число, которое человек только что
      спрятал тапом по соседней строке. */
-  var usd = txFilterUsd(txFilter);
+  var usd = txFilterUsd(txFilter, list);
   if (usd !== null) {
     var sum = document.createElement('span');
     sum.className = 'tx-chip-sum' + (amountsMasked ? ' masked' : '');
@@ -1600,7 +1642,9 @@ function renderTx() {
   toggle.setAttribute('aria-expanded', txExpanded ? 'true' : 'false');
 
   /* Заголовок — единственный след фильтра, когда блок свёрнут. */
-  title.textContent = txFilter ? 'Траты · ' + txFilter.value : 'Последние траты';
+  title.textContent = txFilter
+    ? 'Траты · ' + txFilter.value + (txFilter.cat ? ' · ' + txFilter.cat : '')
+    : 'Последние траты';
 
   box.className = txExpanded ? '' : 'hidden';
   box.textContent = '';
@@ -1621,7 +1665,7 @@ function renderTx() {
   /* Чип рисуем и при пустом результате: он объясняет, чем отфильтровано, и
      держит выход. Убрать его вместе со строками значило бы запереть человека
      в отфильтрованном блоке без единой кнопки назад. */
-  if (txFilter) box.appendChild(txChipNode(list.length, covers));
+  if (txFilter) box.appendChild(txChipNode(list, covers));
 
   if (!list.length) {
     box.appendChild(txStateNode(txEmptyText(txFilter, covers), false));
@@ -1761,8 +1805,11 @@ function holdAnchor(kind, value, wasTop) {
   if (Math.abs(d) > 1) window.scrollBy(0, d);
 }
 
-function scrollToFilter() {
-  var anchor = document.querySelector('#catBody .cat.picked, #catBody .cat-aside.picked, #funds .fund.picked');
+/* Якорь — та строка, по которой тапнули, а не «любая с засечкой»: при
+   фонде с уточнением категорией (BUG-031) засечек две, и первая в документе —
+   строка фонда наверху, тогда как палец лежал на строке категории. */
+function scrollToFilter(kind, value) {
+  var anchor = filterAnchorEl_(kind, value);
   var chip   = document.querySelector('#txBody .tx-chip');
   if (!anchor || !chip) return;
 
@@ -1801,15 +1848,29 @@ function repaintFilter() {
 
    Фильтр один: выбор категории молча снимает фонд и наоборот. Отдельного
    уведомления об этом нет намеренно — заголовок и чип меняются в тот же кадр,
-   плюс haptic, а всплывашка ради обратимого тапа была бы шумом. */
+   плюс haptic, а всплывашка ради обратимого тапа была бы шумом.
+
+   Исключение (BUG-031): пока выбран фонд, блок категорий показывает разбивку
+   этого фонда, и тап по её строке НЕ меняет фонд на категорию, а уточняет
+   фильтр фонда категорией. Повторный тап по той же категории снимает только
+   уточнение, фонд остаётся. Тап по самому фонду снимает всё. */
 function pickTxFilter(kind, value) {
-  var same = txFilter && txFilter.kind === kind && txFilter.value === value;
+  var inFund = !!(txFilter && txFilter.kind === 'fund');
+  var next;
+
+  if (kind === 'cat' && inFund) {
+    next = { kind: 'fund', value: txFilter.value };
+    if (txFilter.cat !== value) next.cat = value;
+  } else {
+    var same = txFilter && txFilter.kind === kind && txFilter.value === value;
+    next = same ? null : { kind: kind, value: value };
+  }
 
   /* Положение строки на экране ДО перестройки — к нему и вернём (holdAnchor). */
   var before = filterAnchorEl_(kind, value);
   var wasTop = before ? before.getBoundingClientRect().top : null;
 
-  txFilter   = same ? null : { kind: kind, value: value };
+  txFilter   = next;
   txShown    = TX_FIRST;   /* иначе новый фильтр открылся бы сразу на 40 строк */
   txRefocus  = false;
   txExpanded = true;
@@ -1821,7 +1882,7 @@ function pickTxFilter(kind, value) {
      до пересчёта раскладки координаты и чипа, и строки ещё не существуют. */
   function settle() {
     holdAnchor(kind, value, wasTop);
-    scrollToFilter();
+    scrollToFilter(kind, value);
   }
   if (window.requestAnimationFrame) window.requestAnimationFrame(settle);
   else settle();
@@ -1916,6 +1977,37 @@ function catVsText(pct, dayIndex) {
   return 'На ' + Math.abs(pct) + '% меньше, чем ' + dayPart + '.';
 }
 
+/* Разбивка ФОНДА по категориям (BUG-031) — на клиенте, из строк списка.
+   Окно то же, что у фильтра по фонду: весь загруженный хвост, цикл не важен,
+   поэтому итог здесь и сумма в чипе под списком — одно число из одного
+   множества. Суммы — из usd (колонка H), как у разбивки цикла: валюту
+   операции складывать нельзя. Возвраты и нули не траты — пропускаем, как
+   miniAppAggregateCats_ на бэкенде.
+
+   Без usd в строках (бэкенд старее страницы) — hasUsd = false, и блок
+   говорит об этом словами, а не рисует нули с уверенным лицом. */
+function catFundItems(items, fund) {
+  var sums = {}, totalUsd = 0, unknownUsd = 0, count = 0, hasUsd = false;
+
+  (items || []).forEach(function (it) {
+    if (it.fund !== fund) return;
+    count++;
+    if (typeof it.usd !== 'number') return;
+    hasUsd = true;
+    if (!(it.usd > 0)) return;
+    totalUsd += it.usd;
+    var cat = it.cat || CAT_UNKNOWN;
+    if (cat === CAT_UNKNOWN) { unknownUsd += it.usd; return; }
+    sums[cat] = (sums[cat] || 0) + it.usd;
+  });
+
+  var list = [];
+  for (var name in sums) list.push({ name: name, usd: sums[name] });
+  list.sort(function (a, b) { return b.usd - a.usd; });
+
+  return { count: count, hasUsd: hasUsd, totalUsd: totalUsd, unknownUsd: unknownUsd, items: list };
+}
+
 /* --- Отрисовка --- */
 
 function catStateNode(text, withRetry) {
@@ -1943,7 +2035,7 @@ function catStateNode(text, withRetry) {
 function catAsideNode(label, usd, first, pick) {
   var row = document.createElement('div');
   row.className = 'cat-aside' + (first ? ' first' : '') + (pick ? ' link' : '') +
-    (pick && txFilter && txFilter.kind === 'cat' && txFilter.value === pick ? ' picked' : '');
+    (pick && pickedCat(txFilter) === pick ? ' picked' : '');
 
   var name = document.createElement('span');
   name.textContent = label;
@@ -1975,15 +2067,18 @@ function catAsideNode(label, usd, first, pick) {
   return row;
 }
 
-function catRow(item, total) {
+/* bare — строка разбивки фонда (BUG-031): без дельты к прошлому циклу.
+   Фондовые траты редкие и крупные (билеты, техника), сравнение с прошлым
+   отрезком дало бы случайные ±300%, а окно у фонда и не цикл вовсе. */
+function catRow(item, total, bare) {
   var row = document.createElement('div');
-  row.className = 'cat' +
-    (txFilter && txFilter.kind === 'cat' && txFilter.value === item.name ? ' picked' : '');
+  row.className = 'cat' + (pickedCat(txFilter) === item.name ? ' picked' : '');
   row.setAttribute('data-key', item.name);   /* якорь доводки, см. filterAnchorEl_ */
 
   /* FEAT-038: строка категории фильтрует список трат под блоком — тем же
      жестом, что и строка фонда. Верх экрана тап не трогает: perDay и шкала
-     считаются по циклу целиком, «дневного лимита категории» не существует. */
+     считаются по циклу целиком, «дневного лимита категории» не существует.
+     При выбранном фонде тот же тап уточняет фильтр фонда (pickTxFilter). */
   row.setAttribute('role', 'button');
   row.tabIndex = 0;
   row.addEventListener('click', function () { pickTxFilter('cat', item.name); });
@@ -2028,22 +2123,100 @@ function catRow(item, total) {
   shareNode.className = 'cat-share';
   shareNode.textContent = share + '%';
 
-  var pct = catDelta(item.usd, item.prevUsd);
-  var delta = document.createElement('span');
-  delta.className = 'cat-delta ' + catDeltaClass(pct);
-  delta.textContent = catDeltaText(pct);
-
   line.appendChild(bar);
   line.appendChild(shareNode);
-  line.appendChild(delta);
+
+  if (!bare) {
+    var pct = catDelta(item.usd, item.prevUsd);
+    var delta = document.createElement('span');
+    delta.className = 'cat-delta ' + catDeltaClass(pct);
+    delta.textContent = catDeltaText(pct);
+    line.appendChild(delta);
+  }
 
   row.appendChild(head);
   row.appendChild(line);
   return row;
 }
 
+/* Шапка обеих разбивок: сколько ушло + подпись справа. */
+function catLeadNode(total, rightText) {
+  var lead = document.createElement('div');
+  lead.className = 'cat-lead';
+
+  var totalNode = document.createElement('span');
+  totalNode.className = 'cat-total' + (amountsMasked ? ' masked' : '');
+  if (amountsMasked) totalNode.textContent = '••••';
+  else               totalNode.innerHTML = moneyHtml(total);
+  totalNode.addEventListener('click', toggleAmountsMask);
+
+  var dayNode = document.createElement('span');
+  dayNode.className = 'cat-day';
+  dayNode.textContent = rightText;
+
+  lead.appendChild(totalNode);
+  lead.appendChild(dayNode);
+  return lead;
+}
+
+/* Остальные категории раскрываем РАЗОМ, а не ступенями: их всего десять
+   (04_data_model §5), и вторая бесконечная кнопка «Ещё» на одном экране
+   с такой же кнопкой под тратами читалась бы как одна и та же. */
+function catMoreNode(left) {
+  var more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'fund-more';
+  more.setAttribute('aria-expanded', catAll ? 'true' : 'false');
+
+  var label = document.createElement('span');
+  label.textContent = catAll ? 'Свернуть' : 'Ещё ' + left + ' ' +
+    plural(left, 'категория', 'категории', 'категорий');
+
+  var caret = document.createElement('span');
+  caret.className = 'fund-caret';
+  caret.textContent = '▾';
+
+  more.appendChild(label);
+  more.appendChild(caret);
+  more.addEventListener('click', function () {
+    catAll = !catAll;
+    renderCats();
+    haptic();
+  });
+  return more;
+}
+
+/* Строки разбивки. SOLO (BUG-028): пока по категории стоит засечка,
+   разбивка складывается до ОДНОЙ строки — той, по которой тапнули. Так
+   решается не симптом, а причина прыжка: между строкой и её составом больше
+   не лежит полблока, доводить экран почти нечем.
+
+   Складываем не в ничто, а в «Ещё N категорий»: иначе ломается сценарий
+   «посмотрел продукты — теперь кафе». Кнопка разворачивает разбивку обратно,
+   НЕ снимая фильтр — выбранная строка остаётся с засечкой среди прочих.
+
+   Возвращает, сложилась ли разбивка (нужно хвосту под ней). */
+function catRowsInto(box, items, total, bare) {
+  var picked = pickedCat(txFilter);
+  var solo   = !!picked && !catAll;
+
+  var visible;
+  if (solo)        visible = items.filter(function (it) { return it.name === picked; });
+  else if (catAll) visible = items;
+  else             visible = items.slice(0, CAT_FIRST);
+
+  visible.forEach(function (it) { box.appendChild(catRow(it, total, bare)); });
+
+  var hidden = items.length - visible.length;
+  if (solo ? hidden > 0 : items.length > CAT_FIRST) {
+    box.appendChild(catMoreNode(solo ? hidden : items.length - CAT_FIRST));
+  }
+  return solo;
+}
+
 function renderCats() {
   var toggle = document.getElementById('catToggle');
+  var title  = document.getElementById('catTitle');
   var box    = document.getElementById('catBody');
   if (!toggle || !box) return;
 
@@ -2053,6 +2226,11 @@ function renderCats() {
   toggle.textContent = catExpanded ? 'скрыть'
                      : (txState === 'error' ? 'не загрузились' : 'показать');
   toggle.setAttribute('aria-expanded', catExpanded ? 'true' : 'false');
+
+  /* BUG-031: при выбранном фонде блок показывает разбивку ЭТОГО фонда, и
+     заголовок говорит об этом, пока блок свёрнут, — как у списка трат. */
+  var fundMode = !!(txFilter && txFilter.kind === 'fund');
+  if (title) title.textContent = fundMode ? 'Категории · ' + txFilter.value : 'Категории';
 
   box.className = catExpanded ? '' : 'hidden';
   box.textContent = '';
@@ -2066,6 +2244,10 @@ function renderCats() {
     box.appendChild(catStateNode(txErrorText || 'Категории не загрузились.', true));
     return;
   }
+  if (fundMode) {
+    renderFundCats(box);
+    return;
+  }
   if (!catData) {
     box.appendChild(catStateNode('Разбивку посчитать не удалось.', true));
     return;
@@ -2074,22 +2256,7 @@ function renderCats() {
   var total = Number(catData.totalUsd) || 0;
 
   /* Шапка: сколько потрачено и на каком дне цикла. */
-  var lead = document.createElement('div');
-  lead.className = 'cat-lead';
-
-  var totalNode = document.createElement('span');
-  totalNode.className = 'cat-total' + (amountsMasked ? ' masked' : '');
-  if (amountsMasked) totalNode.textContent = '••••';
-  else               totalNode.innerHTML = moneyHtml(total);
-  totalNode.addEventListener('click', toggleAmountsMask);
-
-  var dayNode = document.createElement('span');
-  dayNode.className = 'cat-day';
-  dayNode.textContent = catDayText(catData.dayIndex, catData.dayTotal);
-
-  lead.appendChild(totalNode);
-  lead.appendChild(dayNode);
-  box.appendChild(lead);
+  box.appendChild(catLeadNode(total, catDayText(catData.dayIndex, catData.dayTotal)));
 
   var vs = document.createElement('div');
   vs.className = 'cat-vs';
@@ -2102,52 +2269,7 @@ function renderCats() {
     box.appendChild(catStateNode(total ? 'Все траты цикла — из фондов.' : 'В этом цикле трат ещё нет.', false));
   }
 
-  /* SOLO (BUG-028). Пока фильтр по категории активен, разбивка складывается
-     до ОДНОЙ строки — той, по которой тапнули. Так решается не симптом, а
-     причина прыжка: между строкой и её составом больше не лежит полблока,
-     доводить экран почти нечем.
-
-     Складываем не в ничто, а в «Ещё N категорий»: иначе ломается сценарий
-     «посмотрел продукты — теперь кафе», сравнить две категории стало бы
-     дороже, чем до фичи. Кнопка разворачивает разбивку обратно, НЕ снимая
-     фильтр — выбранная строка остаётся с засечкой среди прочих. */
-  var solo = !!(txFilter && txFilter.kind === 'cat') && !catAll;
-
-  var visible;
-  if (solo)        visible = items.filter(function (it) { return it.name === txFilter.value; });
-  else if (catAll) visible = items;
-  else             visible = items.slice(0, CAT_FIRST);
-
-  visible.forEach(function (it) { box.appendChild(catRow(it, total)); });
-
-  /* Остальные категории раскрываем РАЗОМ, а не ступенями: их всего десять
-     (04_data_model §5), и вторая бесконечная кнопка «Ещё» на одном экране
-     с такой же кнопкой под тратами читалась бы как одна и та же. */
-  var hidden = items.length - visible.length;
-  if (solo ? hidden > 0 : items.length > CAT_FIRST) {
-    var more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'fund-more';
-    more.setAttribute('aria-expanded', catAll ? 'true' : 'false');
-
-    var left = solo ? hidden : items.length - CAT_FIRST;
-    var label = document.createElement('span');
-    label.textContent = catAll ? 'Свернуть' : 'Ещё ' + left + ' ' +
-      plural(left, 'категория', 'категории', 'категорий');
-
-    var caret = document.createElement('span');
-    caret.className = 'fund-caret';
-    caret.textContent = '▾';
-
-    more.appendChild(label);
-    more.appendChild(caret);
-    more.addEventListener('click', function () {
-      catAll = !catAll;
-      renderCats();
-      haptic();
-    });
-    box.appendChild(more);
-  }
+  var solo = catRowsInto(box, items, total, false);
 
   /* Фондовые траты и «Не определено» — не категории, поэтому отдельными
      строками под разбивкой, а не в общем ряду.
@@ -2161,7 +2283,7 @@ function renderCats() {
      В solo-режиме хвост складывается по тому же правилу, что и строки: на
      экране остаётся только активная строка. Оставить рядом два чужих
      ведра значило бы свернуть разбивку наполовину. */
-  var soloUnknown = solo && txFilter.value === CAT_UNKNOWN;
+  var soloUnknown = solo && pickedCat(txFilter) === CAT_UNKNOWN;
 
   var asideFirst = true;
   if (catData.fundUsd && !solo) {
@@ -2178,6 +2300,54 @@ function renderCats() {
   note.textContent = catData.truncated
     ? 'Период показан не целиком: в окно последних трат уместилась не вся история цикла. Суммы могут быть занижены.'
     : 'Фондовые траты в разбивку не входят — они не бьют по дневному бюджету. Суммы здесь в валюте экрана, в отличие от списка трат ниже.';
+  box.appendChild(note);
+}
+
+/* Разбивка выбранного фонда (BUG-031). До этого при тапе по фонду список
+   под блоком фильтровался, а сам блок продолжал показывать разбивку цикла —
+   и читался как ответ на другой вопрос. Теперь блок и список считаются из
+   одного множества строк (catFundItems ↔ txFilterItems): итог здесь равен
+   сумме в чипе под списком.
+
+   Дельты к прошлому циклу и «день N из M» здесь нет намеренно: окно фонда —
+   не цикл, а фондовые траты редкие и крупные, сравнение дало бы случайные
+   проценты. Тап по строке уточняет фильтр фонда категорией (pickTxFilter). */
+function renderFundCats(box) {
+  var fundName = txFilter.value;
+  var agg = catFundItems(txItems, fundName);
+
+  if (!agg.count) {
+    box.appendChild(catStateNode(txEmptyText({ kind: 'fund', value: fundName }, false), false));
+    return;
+  }
+
+  /* Тихий фолбэк — невидимый отказ: страница может оказаться новее бэкенда
+     (зеркало и Apps Script деплоятся порознь). Нули на месте неизвестных
+     сумм выглядели бы как «из фонда не тратили». */
+  if (!agg.hasUsd) {
+    box.appendChild(catStateNode(
+      'Суммы в долларах не пришли — Apps Script старее страницы. Разбивка по фонду появится после его обновления.', false));
+    return;
+  }
+
+  box.appendChild(catLeadNode(agg.totalUsd,
+    'из фонда · ' + agg.count + ' ' + plural(agg.count, 'трата', 'траты', 'трат')));
+
+  if (!agg.items.length && !agg.unknownUsd) {
+    box.appendChild(catStateNode('У этих трат нет суммы в долларах — раскладывать нечего.', false));
+    return;
+  }
+
+  var solo = catRowsInto(box, agg.items, agg.totalUsd, true);
+
+  var soloUnknown = solo && pickedCat(txFilter) === CAT_UNKNOWN;
+  if (agg.unknownUsd && (!solo || soloUnknown)) {
+    box.appendChild(catAsideNode('Без категории', agg.unknownUsd, true, CAT_UNKNOWN));
+  }
+
+  var note = document.createElement('div');
+  note.className = 'tx-note';
+  note.textContent = 'Те же траты, что в списке ниже: последние загруженные из фонда, без границы цикла. Суммы в валюте экрана по курсу на день траты.';
   box.appendChild(note);
 }
 
