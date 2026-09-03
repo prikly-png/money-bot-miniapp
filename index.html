@@ -1480,6 +1480,47 @@ function loadingText() {
     : 'Загружаю…';
 }
 
+/* Защита от собственного шторма (BUG-030).
+
+   02.09.2026 приложение довело себя до отказа: запрос не дошёл → человек жмёт
+   «Повторить» → ещё запрос → раздача Apps Script начинает отбивать частые GET
+   страницей 404 → отказов больше → жмут чаще. Проверено снаружи: восемь проб
+   подряд без пауз дали сплошные 404 с задержкой до 37 с, а одна проба после
+   паузы — честные 200 за 5 с. Бэкенд при этом был здоров, бот отвечал.
+
+   Поэтому два ограничителя: запрос не стартует, пока предыдущий в полёте
+   (loadTx/load), и после отказа повтор доступен не сразу. Пауза короткая —
+   она гасит серию нажатий, а не наказывает за одно. */
+var RETRY_COOLDOWN_MS = 5000;
+var retryAt = 0;                    /* до этого момента повтор заблокирован */
+
+/* Отсчёт живёт на самой кнопке, а не в перерисовке блока: так он не тянет
+   за собой renderTx/renderCats каждую секунду и не спорит с их состоянием. */
+function armRetry(btn, onClick) {
+  function paint() {
+    var left = Math.ceil((retryAt - Date.now()) / 1000);
+    if (left > 0) {
+      btn.disabled = true;
+      btn.textContent = '↻ Повторить через ' + left + ' с';
+      return true;
+    }
+    btn.disabled = false;
+    btn.textContent = '↻ Повторить';
+    return false;
+  }
+
+  if (paint()) {
+    var t = setInterval(function () {
+      if (!paint() || btn.isConnected === false) clearInterval(t);
+    }, 500);
+  }
+
+  btn.addEventListener('click', function () {
+    if (btn.disabled) return;
+    onClick();
+  });
+}
+
 function txStateNode(text, withRetry) {
   var box = document.createElement('div');
   box.className = 'tx-state';
@@ -1492,8 +1533,7 @@ function txStateNode(text, withRetry) {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn';
-    btn.textContent = '↻ Повторить';
-    btn.addEventListener('click', loadTx);
+    armRetry(btn, loadTx);
     box.appendChild(btn);
   }
   return box;
@@ -1890,8 +1930,7 @@ function catStateNode(text, withRetry) {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn';
-    btn.textContent = '↻ Повторить';
-    btn.addEventListener('click', loadTx);
+    armRetry(btn, loadTx);
     box.appendChild(btn);
   }
   return box;
@@ -2160,6 +2199,10 @@ function toggleCatSection() {
    «Повторить»; тихая догрузка по требованию замаскировала бы мёртвый
    prefetch, и мы бы о нём не узнали. */
 function loadTx() {
+  /* Повторный вход, пока запрос в полёте, не ускорит его ни на миллисекунду —
+     только добавит ещё одно выполнение в очередь (BUG-030). */
+  if (txState === 'loading') return;
+
   txState = 'loading';
   txSlow  = false;
   renderTx();
@@ -2194,6 +2237,7 @@ function loadTx() {
     txState = 'error';
     txErrorText = kind === 'timeout' ? 'Ответа не дождались.'
                                      : 'Данные не загрузились.';
+    retryAt = Date.now() + RETRY_COOLDOWN_MS;
     renderTx();
     renderCats();
 
@@ -2232,7 +2276,7 @@ function showError(title, bodyHtml, alarm) {
     '<div style="margin-top:14px"><button class="btn" id="retryBtn" type="button">↻ Повторить</button></div>';
   box.querySelector('.notice-title').textContent = title;
   box.querySelector('.notice-body').innerHTML = bodyHtml;
-  document.getElementById('retryBtn').addEventListener('click', load);
+  armRetry(document.getElementById('retryBtn'), load);
 }
 function clearError() {
   var box = document.getElementById('errorBlock');
@@ -2356,7 +2400,14 @@ function readCache() {
   catch (e) { return null; }
 }
 
+var mainBusy = false;   /* основной запрос в полёте (BUG-030) */
+
 function load() {
+  /* Кнопка «Обновить» блокируется ниже, но точек входа больше: плашка отказа,
+     старт и повтор из блоков. Флаг закрывает их все разом. */
+  if (mainBusy) return;
+  mainBusy = true;
+
   var btn = document.getElementById('refresh');
   btn.disabled = true;
 
@@ -2364,8 +2415,10 @@ function load() {
 
   jsonp(API_URL, { initData: initData }, function (data) {
     btn.disabled = false;
+    mainBusy = false;
 
     if (data && data.error) {
+      retryAt = Date.now() + RETRY_COOLDOWN_MS;
       var m = reasonMessage(data.reason);
       showError(m.title, m.body, m.alarm);
       var cached = readCache();
@@ -2393,6 +2446,9 @@ function load() {
 
   }, function (kind) {
     btn.disabled = false;
+    mainBusy = false;
+    retryAt = Date.now() + RETRY_COOLDOWN_MS;
+
     var cached = readCache();
     showError(
       kind === 'timeout' ? 'Долго не отвечает' : 'Не удалось соединиться',
