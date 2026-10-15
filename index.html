@@ -954,6 +954,63 @@ var API_URL = API_URL_PLACEHOLDER;
 var LS_URL   = 'miniapp_api_url';
 var LS_CACHE = 'miniapp_last_payload';
 
+/* --- Версия страницы и самопроверка свежести (v2.35.1) ------------------
+   Встроенный браузер Telegram держит страницу в кеше: GitHub Pages разрешает
+   хранить её 10 минут (max-age=600), iOS порой дольше. 15.10.2026 выкладка
+   v2.35 выглядела «ничего не поменялось» — телефон показывал старую копию.
+
+   APP_VERSION — номер этой страницы. ПОДНИМАТЬ ПРИ КАЖДОЙ ПРАВКЕ СТРАНИЦЫ:
+   deploy_miniapp.sh кладёт его же рядом в version.json, и открытая старая
+   копия, сверившись с ним, перезагружается сама. Номер виден в подвале —
+   сразу понятно, что открыто. */
+var APP_VERSION = '2.35.1';
+var SS_RELOAD   = 'miniapp_reload_to';   /* к какой версии уже пробовали перезагрузиться */
+var appNewer    = '';                    /* на сайте новее, но перезагрузка не помогла */
+
+/* ЧИСТАЯ (test_miniapp_pace.js). Сравнение «2.35.1» и «2.36»: −1 / 0 / 1. */
+function cmpVer(a, b) {
+  var x = String(a || '').split('.'), y = String(b || '').split('.');
+  for (var i = 0; i < Math.max(x.length, y.length); i++) {
+    var p = parseInt(x[i], 10) || 0, q = parseInt(y[i], 10) || 0;
+    if (p !== q) return p < q ? -1 : 1;
+  }
+  return 0;
+}
+
+/* Сверка с version.json. Перезагрузка — только к БОЛЕЕ НОВОЙ версии и только
+   один раз на версию: если и после неё открылась старая (кеш упрямее), не
+   крутимся по кругу, а говорим в подвале, что делать. Адрес с ?v= обходит
+   кеш, хвост #… с подписью Telegram сохраняем — без неё бэкенд откажет.
+   Отказ сети — молча: это подсказка, а не условие работы экрана. */
+function checkFreshness() {
+  if (!window.fetch || location.protocol === 'file:') return;
+  fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      var v = j && j.version ? String(j.version) : '';
+      if (!v || cmpVer(v, APP_VERSION) <= 0) {
+        try { sessionStorage.removeItem(SS_RELOAD); } catch (e) {}
+        return;
+      }
+      var tried = null;
+      try { tried = sessionStorage.getItem(SS_RELOAD); } catch (e) {}
+      if (tried === v) { appNewer = v; renderStamp(); return; }
+      try { sessionStorage.setItem(SS_RELOAD, v); } catch (e) {}
+      location.replace(location.pathname + '?v=' + encodeURIComponent(v) + location.hash);
+    })
+    .catch(function () {});
+}
+
+/* Подвал: версия страницы + когда обновлены числа. */
+var stampText = '';
+function renderStamp(text) {
+  if (typeof text === 'string') stampText = text;
+  var el = document.getElementById('stamp');
+  if (!el) return;
+  el.textContent = 'v' + APP_VERSION + ' · ' +
+    (appNewer ? 'вышла v' + appNewer + ' — закройте и откройте мини-апп' : stampText);
+}
+
 var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 
 /* --- Тема ----------------------------------------------------------------
@@ -1087,8 +1144,7 @@ function render(data, isStale) {
   renderCats(); /* а вот суммы категорий — в валюте экрана, их пересчитать надо */
   renderPace();
 
-  document.getElementById('stamp').textContent =
-    (isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt);
+  renderStamp((isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt));
 }
 
 /* Подпись у заголовка «Фонды» — она же переключатель и она же ответ на
@@ -3299,8 +3355,7 @@ function load() {
   }, function () {
     /* Основной запрос затянулся. Плашку не показываем — это не отказ, а
        ожидание; говорим тихо, в подвале, где и так живёт отметка времени. */
-    var stamp = document.getElementById('stamp');
-    if (stamp) stamp.textContent = 'Apps Script просыпается…';
+    renderStamp('Apps Script просыпается…');
   });
 }
 
@@ -3336,6 +3391,9 @@ function load() {
 
   var saved = localStorage.getItem(LS_URL);
   if (saved) API_URL = saved;
+
+  renderStamp('');      /* версия видна сразу, ещё до ответа Apps Script */
+  checkFreshness();
 
   /* Показываем сохранённые числа СРАЗУ: вебвью открывается «холодным»,
      и пустой экран на секунду хуже, чем слегка приглушённые прошлые данные. */
