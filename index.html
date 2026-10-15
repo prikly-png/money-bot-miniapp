@@ -2493,10 +2493,14 @@ function toggleCatSection() {
    ответом part=tx (paceDaily), поэтому до второго блок говорит «Загружаю…»
    вместо линии, но запас в шапке уже виден.
 
-   Линия прошлых дней восстанавливается ВПЕРЁД от снимка Остатка на начало
-   цикла (MONTH_BUDGET) минус траты без фонда. Всё, что меняло Остаток мимо
-   журнала (входящие BOG, курсы, ручные правки), сложено в ступеньку у точки
-   «сегодня»: прошлое честное, а сегодняшняя точка — реальный Остаток.
+   Линия прошлых дней восстанавливается НАЗАД от сегодняшнего реального
+   Остатка: остаток на начало дня k = Остаток сейчас + траты без фонда
+   с дня k по сегодня. v2.34.1: первая версия строила её вперёд от снимка
+   MONTH_BUDGET, но бот делает снимок при ПЕРВОМ «📊 Отчёте» после ЗП, а не
+   в сам день ЗП — нажатый на 11-й день отчёт сдвигал всю линию вниз на
+   траты 10 дней и рисовал фальшивый скачок у «сегодня». Назад от Остатка
+   снимок не нужен, линия есть с первого дня. Цена — поступления посреди
+   цикла (входящие BOG, курсы) ложатся на прошлые дни, а не на свой день.
    =========================================================================== */
 
 var PACE_DAY      = 86400000;
@@ -2527,12 +2531,14 @@ function paceDayLabel(dayStartTs) {
   return txShortDate(dayStartTs + PACE_DAY / 2);
 }
 
-/* Остаток на НАЧАЛО дней 0..todayIdx. Нет снимка бюджета — null:
-   рисовать прошлое не от чего. */
-function paceSeries(budget, days, todayIdx) {
-  if (!(Number(budget) > 0) || !days) return null;
-  var out = [Number(budget)], acc = Number(budget);
-  for (var k = 0; k < todayIdx; k++) { acc -= Number(days[k]) || 0; out.push(acc); }
+/* Остаток на НАЧАЛО дней 0..todayIdx — назад от сегодняшнего Остатка:
+   на начало дня k было столько, сколько есть сейчас, плюс всё потраченное
+   с дня k по сегодня включительно. Последняя точка минус сегодняшние траты
+   и есть Остаток — линия сходится с ним по построению. */
+function paceSeries(remainder, days, todayIdx) {
+  if (!days) return null;
+  var out = [], acc = Number(remainder) || 0;
+  for (var k = todayIdx; k >= 0; k--) { acc += Number(days[k]) || 0; out[k] = acc; }
   return out;
 }
 
@@ -2660,7 +2666,7 @@ function paceDrawChart(box, m) {
               { stroke: m.fc.end < 0 ? 'var(--brick)' : 'var(--ink-soft)' });
   }
 
-  /* Остаток: начала дней + ступенька к реальному Остатку у «сегодня». */
+  /* Остаток: начала дней, последний отрезок — сегодняшние траты до Остатка. */
   if (m.series) {
     var fp = [];
     for (var j = 0; j < m.series.length; j++) fp.push(x(j) + ',' + y(m.series[j]));
@@ -2757,7 +2763,7 @@ function renderPace() {
 
   var days   = (txState === 'ready' && paceDaily) ? paceDaily.days : null;
   var covers = !!(paceDaily && paceDaily.covers);
-  var series = (days && covers) ? paceSeries(plan.budget, days, todayIdx) : null;
+  var series = (days && covers) ? paceSeries(remainder, days, todayIdx) : null;
   var fc     = (days && covers) ? paceForecast(remainder, days, todayIdx, plan.daysLeft) : null;
   var selK   = (txFilter && txFilter.kind === 'day')
              ? Math.round((txFilter.value - plan.cycleStart) / PACE_DAY) : null;
@@ -2829,7 +2835,6 @@ function renderPace() {
                ' · средний день ' + paceMoneyText(fc.avg));
   }
   if (days && !covers) faint.push('В журнале не все траты цикла — линию прошлых дней и прогноз не рисуем.');
-  if (days && covers && !series) faint.push('Линия прошлых дней появится после первого «📊 Отчёта» в этом цикле.');
   /* Дни до ЗП: запас считается от J27 (то же число делит «доступно в день»),
      бот — от календаря ЗП. Разошлись — говорим вслух, иначе бот и экран
      покажут разный запас молча. */
