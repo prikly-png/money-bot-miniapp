@@ -420,7 +420,13 @@ body {
   overflow: visible;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+  /* Ведение пальцем по графику (v2.35): горизонтальный жест — наш,
+     вертикальный остаётся прокрутке страницы. Без выделения и меню
+     долгого нажатия iOS — палец лежит на графике подолгу. */
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 .pace-chart text { font-family: var(--font-text); font-size: 10px; fill: var(--ink-faint); }
 .pace-legend {
@@ -2003,9 +2009,12 @@ function pickTxFilter(kind, value) {
 
   /* Через кадр: блок трат только что развернулся, а блок категорий сложился —
      до пересчёта раскладки координаты и чипа, и строки ещё не существуют. */
+  /* День из «Темпа» (v2.35) — без доводки экрана: человек ведёт пальцем по
+     графику и смотрит на него же, прыжок к списку выдёргивал его из жеста.
+     Список ниже раскрывается и фильтруется на месте. */
   function settle() {
     holdAnchor(kind, value, wasTop);
-    scrollToFilter(kind, value);
+    if (kind !== 'day') scrollToFilter(kind, value);
   }
   if (window.requestAnimationFrame) window.requestAnimationFrame(settle);
   else settle();
@@ -2504,7 +2513,9 @@ function toggleCatSection() {
    =========================================================================== */
 
 var PACE_DAY      = 86400000;
-var PACE_FC_DAYS  = 3;        /* раньше прогноз — гадание по одному-двум дням */
+var PACE_FC_DAYS  = 3;        /* меньше дней в выборке — прогноз гадание */
+var PACE_TB_MS    = 4 * 3600000;   /* Тбилиси UTC+4, без перехода на летнее время */
+var PACE_ONEOFF_X = 3;        /* день дороже 3 медиан — разовый, в «обычный день» не идёт */
 var PACE_H        = 168;
 var PACE_TOP      = 14;
 var PACE_BOT      = 146;
@@ -2550,26 +2561,113 @@ function pacePlanAt(xByDay, k) {
   return sum;
 }
 
-/* Прогноз остатка к ЗП. Средний день — по ПОЛНЫМ прошедшим дням: сегодняшний
-   ещё не кончился и занизил бы среднее. Сегодня считаем днём не дешевле
-   среднего — уже потраченное не отменить. Первые дни цикла — null. */
-function paceForecast(remainder, days, todayIdx, daysLeft) {
-  if (todayIdx < PACE_FC_DAYS || !days) return null;
-  var full = 0;
-  for (var k = 0; k < todayIdx; k++) full += Number(days[k]) || 0;
-  var avg  = full / todayIdx;
-  var rest = Math.max(0, avg - (Number(days[todayIdx]) || 0)) +
-             avg * Math.max(0, daysLeft - 1);
-  return { end: (Number(remainder) || 0) - rest, avg: avg };
+/* День недели дня цикла по Тбилиси (0 — воскресенье). Начало дня — полночь
+   Тбилиси; середина суток в UTC+4 — та же дата в любой зоне телефона. */
+function paceWeekday(dayStartTs) {
+  return new Date(dayStartTs + PACE_TB_MS + PACE_DAY / 2).getUTCDay();
+}
+
+function paceMean(a) {
+  var s = 0;
+  for (var i = 0; i < a.length; i++) s += a[i];
+  return a.length ? s / a.length : 0;
+}
+
+/* «Обычный день» для прогноза (v2.35). Выборка — полные прошедшие дни этого
+   цикла и прошлого, БЕЗ подписок (их прогноз рисует по расписанию).
+   - Разовые крупные дни (дороже PACE_ONEOFF_X медиан) в среднее не идут:
+     покупка за $400 иначе подняла бы «средний день» на все оставшиеся дни.
+     Сами деньги, конечно, в Остатке — прогноз только не ждёт их повторения.
+   - Будни и выходные — отдельно, если в каждой группе хватает дней и они
+     заметно (≥15%) различаются; иначе один «обычный день».
+   samples: [{ usd, wd }]. Меньше PACE_FC_DAYS дней — null. */
+function paceTypical(samples) {
+  if (!samples || samples.length < PACE_FC_DAYS) return null;
+  var vals = samples.map(function (s) { return Number(s.usd) || 0; }).sort(function (a, b) { return a - b; });
+  var mid = vals.length >> 1;
+  var med = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+  var cap = med > 0 ? med * PACE_ONEOFF_X : Infinity;
+
+  var keep = [], wk = [], we = [], dropped = 0;
+  samples.forEach(function (s) {
+    var u = Number(s.usd) || 0;
+    if (u > cap) { dropped++; return; }
+    keep.push(u);
+    (s.wd === 0 || s.wd === 6 ? we : wk).push(u);
+  });
+
+  var typical = paceMean(keep);
+  var weekday = paceMean(wk), weekend = paceMean(we);
+  var split = wk.length >= 4 && we.length >= 2 &&
+              Math.abs(weekend - weekday) >= 0.15 * Math.max(typical, 1);
+  return { typical: typical, weekday: split ? weekday : typical,
+           weekend: split ? weekend : typical, split: split, dropped: dropped, n: samples.length };
+}
+
+/* Выборка для paceTypical: полные дни этого цикла + прошлый цикл, если окно
+   его покрыло (prevOrganic не null). */
+function paceSamples(organic, todayIdx, cycleStart, prevOrganic, prevStart) {
+  var out = [];
+  for (var k = 0; k < todayIdx; k++) {
+    out.push({ usd: Number(organic[k]) || 0, wd: paceWeekday(cycleStart + k * PACE_DAY) });
+  }
+  if (prevOrganic && prevStart) {
+    for (var j = 0; j < prevOrganic.length; j++) {
+      out.push({ usd: Number(prevOrganic[j]) || 0, wd: paceWeekday(prevStart + j * PACE_DAY) });
+    }
+  }
+  return out;
+}
+
+/* Прогноз Остатка по дням до ЗП. День d стоит «обычный день» своего типа
+   (будни/выходные); сегодня — только то, что от него ещё не потрачено.
+   Подписки встают ступенькой в конце своего дня. path[i] — остаток на конец
+   дня todayIdx + i ДО подписок этого дня, after[i] — после. */
+function paceForecastPath(remainder, todayIdx, dayTotal, cycleStart, todaySoFar, typ, subs) {
+  if (!typ) return null;
+  var v = Number(remainder) || 0, path = [], after = [], subsUsd = 0;
+  for (var d = todayIdx; d < dayTotal; d++) {
+    var wd = paceWeekday(cycleStart + d * PACE_DAY);
+    var t  = (wd === 0 || wd === 6) ? typ.weekend : typ.weekday;
+    if (d === todayIdx) t = Math.max(0, t - (Number(todaySoFar) || 0));
+    v -= t;
+    path.push(v);
+    (subs || []).forEach(function (s) {
+      if (Math.floor((s.ts - cycleStart) / PACE_DAY) === d) { v -= s.usd; subsUsd += s.usd; }
+    });
+    after.push(v);
+  }
+  return { path: path, after: after, end: v, subsUsd: subsUsd };
 }
 
 /* Тап по графику → день цикла. Доля ширины → полоса дня; будущее не
    выбирается — трат там нет. */
-function paceDayAt(frac, dayTotal, todayIdx) {
+function paceDayAt(frac, dayTotal, todayIdx, clamp) {
+  if (clamp) {                       /* ведение: палец ушёл за край — крайний день */
+    if (!(frac >= 0)) return 0;
+    return Math.min(todayIdx, Math.max(0, Math.floor(frac * dayTotal)));
+  }
   if (!(frac >= 0) || frac > 1) return -1;
   var k = Math.floor(frac * dayTotal);
   if (k > dayTotal - 1) k = dayTotal - 1;
   return k > todayIdx ? -1 : k;
+}
+
+/* Строка над графиком: выбранный (или ведомый пальцем) день — его траты и
+   остаток на конец дня; ничего не выбрано — подсказка жеста. */
+function paceFillReadout(ro, k, c) {
+  ro.textContent = '';
+  if (k === null || k < 0) {
+    ro.textContent = 'веди пальцем по графику — траты дня откроются ниже';
+    return;
+  }
+  paceText(ro, paceDayLabel(c.cycleStart + k * PACE_DAY) + ' · потрачено ');
+  ro.appendChild(paceBold(Number(c.days[k]) || 0));
+  var rest = k < c.todayIdx ? (c.series ? c.series[k + 1] : null) : c.remainder;
+  if (rest !== null) {
+    paceText(ro, ' · остаток ');
+    ro.appendChild(paceBold(rest));
+  }
 }
 
 /* Запас на день — тот же, что шкала показывает разницей «доступно − план». */
@@ -2638,7 +2736,7 @@ function paceDrawChart(box, m) {
   function x(k) { return L + (R - L) * k / T; }
 
   var hi = Math.max(m.planStart, m.remainder, m.series ? Math.max.apply(null, m.series) : 0);
-  var lo = Math.min(0, m.remainder, m.fc ? m.fc.end : 0);
+  var lo = Math.min(0, m.remainder, m.fc ? Math.min.apply(null, m.fc.after) : 0);
   if (hi <= lo) hi = lo + 1;
   function y(v) { return PACE_TOP + (PACE_BOT - PACE_TOP) * (hi - v) / (hi - lo); }
 
@@ -2661,8 +2759,16 @@ function paceDrawChart(box, m) {
                                'stroke-dasharray': '4 4' }, { stroke: 'var(--ink-ghost)' });
 
   if (m.fc) {
-    paceSvgEl(svg, 'line', { x1: x(m.todayIdx), y1: y(m.remainder), x2: x(T), y2: y(m.fc.end),
-                             'stroke-width': 2, 'stroke-dasharray': '0.1 4', 'stroke-linecap': 'round' },
+    /* Конец каждого дня; у дня с подпиской — вертикальная ступенька. */
+    var fcp = [x(m.todayIdx) + ',' + y(m.remainder)];
+    for (var f = 0; f < m.fc.path.length; f++) {
+      var fx = x(m.todayIdx + f + 1);
+      fcp.push(fx + ',' + y(m.fc.path[f]));
+      if (m.fc.after[f] !== m.fc.path[f]) fcp.push(fx + ',' + y(m.fc.after[f]));
+    }
+    paceSvgEl(svg, 'polyline', { points: fcp.join(' '), fill: 'none', 'stroke-width': 2,
+                                 'stroke-dasharray': '0.1 4', 'stroke-linecap': 'round',
+                                 'stroke-linejoin': 'round' },
               { stroke: m.fc.end < 0 ? 'var(--brick)' : 'var(--ink-soft)' });
   }
 
@@ -2676,15 +2782,25 @@ function paceDrawChart(box, m) {
               { stroke: 'var(--ink)' });
   }
 
-  if (m.selK !== null) {
-    var sx = m.selK < m.todayIdx ? x(m.selK + 1) : x(m.todayIdx);
-    paceSvgEl(svg, 'line', { x1: sx, x2: sx, y1: PACE_TOP - 6, y2: PACE_BOT, 'stroke-width': 1 },
-              { stroke: 'var(--ink-faint)' });
-    if (m.selK < m.todayIdx && m.series) {
-      paceSvgEl(svg, 'circle', { cx: sx, cy: y(m.series[m.selK + 1]), r: 4, 'stroke-width': 2 },
-                { fill: 'var(--ink)', stroke: 'var(--paper-sunk)' });
+  /* Отметка дня — одни и те же узлы двигаются за пальцем: пересборка
+     графика на каждом шаге оборвала бы захват указателя. */
+  var selLine = paceSvgEl(svg, 'line', { x1: 0, x2: 0, y1: PACE_TOP - 6, y2: PACE_BOT, 'stroke-width': 1 },
+                          { stroke: 'var(--ink-faint)' });
+  var selDot  = paceSvgEl(svg, 'circle', { cx: 0, cy: 0, r: 4, 'stroke-width': 2 },
+                          { fill: 'var(--ink)', stroke: 'var(--paper-sunk)' });
+  function setSel(k) {
+    if (k === null || k < 0) { selLine.style.display = 'none'; selDot.style.display = 'none'; return; }
+    var sx = k < m.todayIdx ? x(k + 1) : x(m.todayIdx);
+    selLine.setAttribute('x1', sx); selLine.setAttribute('x2', sx);
+    selLine.style.display = '';
+    if (k < m.todayIdx && m.series) {
+      selDot.setAttribute('cx', sx); selDot.setAttribute('cy', y(m.series[k + 1]));
+      selDot.style.display = '';
+    } else {
+      selDot.style.display = 'none';
     }
   }
+  setSel(m.selK);
 
   paceSvgEl(svg, 'circle', { cx: x(m.todayIdx), cy: y(m.remainder), r: 5, 'stroke-width': 2 },
             { fill: m.status === 'ahead' ? 'var(--ledger)'
@@ -2702,13 +2818,40 @@ function paceDrawChart(box, m) {
     t.textContent = lb[2];
   });
 
-  svg.addEventListener('click', function (ev) {
+  /* Ведение пальцем (v2.35): зажал — отметка и строка над графиком идут за
+     пальцем, на каждом новом дне короткая вибрация; отпустил — день выбран и
+     фильтрует список ниже. Обычный тап — то же самое за одно касание; тап по
+     уже выбранному дню снимает выбор. Вертикальный свайп отдаём прокрутке:
+     браузер пришлёт pointercancel, и отметка вернётся на место. */
+  function dayAt(ev, clamp) {
     var r = svg.getBoundingClientRect();
-    var frac = (ev.clientX - r.left - L * r.width / W) / ((R - L) * r.width / W);
-    var day = paceDayAt(frac, T, m.todayIdx);
-    if (day < 0) return;
-    pickTxFilter('day', m.cycleStart + day * PACE_DAY);
+    return paceDayAt((ev.clientX - r.left - L * r.width / W) / ((R - L) * r.width / W),
+                     T, m.todayIdx, clamp);
+  }
+  function show(k) { setSel(k); m.onScrub(k); }
+  var drag = null;
+  svg.addEventListener('pointerdown', function (ev) {
+    drag = { k: dayAt(ev, false), x0: ev.clientX, moved: false };
+    try { svg.setPointerCapture(ev.pointerId); } catch (e) {}
+    if (drag.k >= 0) show(drag.k);
   });
+  svg.addEventListener('pointermove', function (ev) {
+    if (!drag) return;
+    if (Math.abs(ev.clientX - drag.x0) > 6) drag.moved = true;
+    if (!drag.moved) return;
+    var k = dayAt(ev, true);
+    if (k !== drag.k) { drag.k = k; show(k); haptic(); }
+  });
+  function finish(commit) {
+    if (!drag) return;
+    var d = drag;
+    drag = null;
+    if (!commit || d.k < 0) { show(m.selK); return; }
+    if (d.moved && d.k === m.selK) return;      /* довёл до уже выбранного — оставляем */
+    pickTxFilter('day', m.cycleStart + d.k * PACE_DAY);
+  }
+  svg.addEventListener('pointerup', function () { finish(true); });
+  svg.addEventListener('pointercancel', function () { finish(false); });
 }
 
 function renderPace() {
@@ -2764,7 +2907,17 @@ function renderPace() {
   var days   = (txState === 'ready' && paceDaily) ? paceDaily.days : null;
   var covers = !!(paceDaily && paceDaily.covers);
   var series = (days && covers) ? paceSeries(remainder, days, todayIdx) : null;
-  var fc     = (days && covers) ? paceForecast(remainder, days, todayIdx, plan.daysLeft) : null;
+  /* Прогноз (v2.35): «обычный день» по полным дням этого и прошлого цикла
+     без подписок и разовых крупных трат + подписки по расписанию. Старый
+     бэкенд без organic — берём days, прогноз просто будет грубее. */
+  var organic = (paceDaily && paceDaily.organic) ? paceDaily.organic : days;
+  var typ = (days && covers)
+          ? paceTypical(paceSamples(organic, todayIdx, plan.cycleStart,
+                                    paceDaily.prevOrganic, paceDaily.prevStart))
+          : null;
+  var fc  = typ ? paceForecastPath(remainder, todayIdx, dayTotal, plan.cycleStart,
+                                   Number(organic[todayIdx]) || 0, typ, plan.subs || [])
+                : null;
   var selK   = (txFilter && txFilter.kind === 'day')
              ? Math.round((txFilter.value - plan.cycleStart) / PACE_DAY) : null;
   if (selK !== null && (selK < 0 || selK > todayIdx)) selK = null;
@@ -2772,24 +2925,17 @@ function renderPace() {
   if (days) {
     var ro = document.createElement('div');
     ro.className = 'pace-readout';
-    if (selK === null) {
-      ro.textContent = 'тап по графику — траты за день';
-    } else {
-      paceText(ro, paceDayLabel(plan.cycleStart + selK * PACE_DAY) + ' · потрачено ');
-      ro.appendChild(paceBold(Number(days[selK]) || 0));
-      var rest = selK < todayIdx ? (series ? series[selK + 1] : null) : remainder;
-      if (rest !== null) {
-        paceText(ro, ' · остаток ');
-        ro.appendChild(paceBold(rest));
-      }
-    }
+    var roCtx = { days: days, series: series, remainder: remainder,
+                  todayIdx: todayIdx, cycleStart: plan.cycleStart };
+    paceFillReadout(ro, selK, roCtx);
     box.appendChild(ro);
 
     paceDrawChart(box, {
       dayTotal: dayTotal, todayIdx: todayIdx, xByDay: plan.xByDay,
       planStart: pacePlanAt(plan.xByDay, 0), series: series, remainder: remainder,
       fc: fc, selK: selK, status: plan.status,
-      cycleStart: plan.cycleStart, cycleEnd: plan.cycleEnd
+      cycleStart: plan.cycleStart, cycleEnd: plan.cycleEnd,
+      onScrub: function (k) { paceFillReadout(ro, k, roCtx); }
     });
 
     var lg = document.createElement('div');
@@ -2830,9 +2976,21 @@ function renderPace() {
 
   var faint = [];
   if (fc) {
-    faint.push('при таком темпе к ' + paceDayLabel(plan.cycleEnd) + ' ' +
-               (fc.end >= 0 ? 'останется ≈' : 'не хватит ≈') + paceMoneyText(Math.abs(fc.end)) +
-               ' · средний день ' + paceMoneyText(fc.avg));
+    faint.push('прогноз к ' + paceDayLabel(plan.cycleEnd) + ': ' +
+               (fc.end >= 0 ? 'останется ≈' : 'не хватит ≈') + paceMoneyText(Math.abs(fc.end)));
+    faint.push((typ.split
+                 ? 'обычный день: будни ' + paceMoneyText(typ.weekday) + ', выходные ' + paceMoneyText(typ.weekend)
+                 : 'обычный день ' + paceMoneyText(typ.typical)) +
+               (typ.dropped ? ' · без разовых крупных (' + typ.dropped + ' ' +
+                              plural(typ.dropped, 'день', 'дня', 'дней') + ')' : ''));
+    var subs = plan.subs || [];
+    if (subs.length) {
+      var shown = subs.slice(0, 3).map(function (s) {
+        return s.name + ' ' + paceMoneyText(s.usd) + ' · ' + paceDayLabel(s.ts);
+      });
+      faint.push('впереди подписки: ' + shown.join(', ') +
+                 (subs.length > 3 ? ' и ещё ' + (subs.length - 3) : ''));
+    }
   }
   if (days && !covers) faint.push('В журнале не все траты цикла — линию прошлых дней и прогноз не рисуем.');
   /* Дни до ЗП: запас считается от J27 (то же число делит «доступно в день»),
