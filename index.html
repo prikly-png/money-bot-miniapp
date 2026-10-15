@@ -373,6 +373,79 @@ body {
    ------------------------------------------------------------------------ */
 .cat-section { margin-top: var(--s10); }
 
+/* --- FEAT-044: «Темп» — остаток цикла против ручного плана X ---------------
+   Сворачиваемый блок между фондами и категориями: итог цикла → разбивка →
+   отдельные траты. Пунктир — план «X в день до нуля к ЗП», сплошная —
+   остаток по дням, точка — сегодня, точечная — прогноз при текущем темпе.
+   Линии в цвет чернил, а не в зелёный/красный: цвет несёт только знак
+   запаса (точка «сегодня» и число в шапке), те же два цвета, что на шкале.
+   ------------------------------------------------------------------------ */
+.pace-section { margin-top: var(--s10); }
+.pace-lead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) 0 var(--s1);
+}
+.pace-delta {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.pace-delta.ahead  { color: var(--ledger); }
+.pace-delta.behind { color: var(--brick); }
+.pace-delta.masked { color: var(--ink-faint); letter-spacing: 2px; cursor: pointer; }
+.pace-delta-label {
+  margin-left: 6px;
+  font-family: var(--font-text);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+}
+.pace-day { font-size: 11px; color: var(--ink-faint); text-align: right; white-space: nowrap; }
+.pace-readout {
+  min-height: 18px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.pace-readout b { color: var(--ink); font-weight: 500; font-family: var(--font-num); }
+.pace-chart {
+  display: block;
+  width: 100%;
+  overflow: visible;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.pace-chart text { font-family: var(--font-text); font-size: 10px; fill: var(--ink-faint); }
+.pace-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s4);
+  margin-top: var(--s2);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.pace-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.pace-key { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--ink); }
+.pace-key.plan { border-top: 1.5px dashed var(--ink-ghost); }
+.pace-key.fc   { border-top: 2px dotted var(--ink-soft); }
+.pace-foot {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.pace-foot .num { color: var(--ink); font-weight: 500; }
+.pace-foot .masked { color: var(--ink-faint); letter-spacing: 2px; cursor: pointer; }
+.pace-faint { margin-top: var(--s1); font-size: 11px; color: var(--ink-faint); }
+
 /* Раскрытый блок ложится в углубление листа (02.09.2026, по живому тесту v2.27).
    С тремя главами подряд экран читался сплошной лентой: заголовки тише строк,
    а линия под заголовком неотличима от линовки самих строк — взгляду не за что
@@ -384,6 +457,7 @@ body {
 
    Поля растянуты за отступ страницы (`-s4` при `padding: --s5`): карман шире
    текста, но не упирается в край экрана, иначе скругления не видно. */
+#paceBody:not(.hidden),
 #catBody:not(.hidden),
 #txBody:not(.hidden) {
   background: var(--paper-sunk);
@@ -813,6 +887,18 @@ body {
     <div id="funds"></div>
   </section>
 
+  <!-- FEAT-044: темп цикла — остаток против ручного плана X по дням.
+       Стоит над категориями: итог цикла → разбивка → отдельные траты.
+       План приходит основным ответом, траты по дням — ответом part=tx,
+       поэтому до второго ответа блок показывает «Загружаю…». -->
+  <section class="pace-section">
+    <div class="section-head">
+      <span class="section-title">Темп</span>
+      <button class="section-note" id="paceToggle" type="button">показать</button>
+    </div>
+    <div id="paceBody" class="hidden"></div>
+  </section>
+
   <!-- FEAT-036: траты по категориям за текущий зарплатный цикл. Стоит МЕЖДУ
        фондами и списком трат: категории — обобщение, список — детализация
        того же периода. Данные приходят тем же запросом part=tx, что и список,
@@ -993,6 +1079,7 @@ function render(data, isStale) {
   renderTx();   /* сам список от валюты экрана не зависит — перерисовываем ради
                    заголовка с фильтром и подписи «показать/скрыть» */
   renderCats(); /* а вот суммы категорий — в валюте экрана, их пересчитать надо */
+  renderPace();
 
   document.getElementById('stamp').textContent =
     (isStale ? 'из памяти · ' : 'обновлено ') + timeStamp(data.updatedAt);
@@ -1101,6 +1188,7 @@ function toggleAmountsMask(ev) {
   amountsMasked = !amountsMasked;
   renderFunds(lastData && lastData.funds ? lastData.funds : []);
   renderCats();
+  renderPace();
   renderTx();
   haptic();
 }
@@ -1265,7 +1353,8 @@ var txErrorText  = '';
 var txSlow       = false;   /* загрузка затянулась — сказать об этом словами */
 var txExpanded   = false;
 var txShown      = TX_FIRST;
-/* Фильтр списка ОДИН на экран: { kind: 'fund' | 'cat', value: '…' } либо null.
+/* Фильтр списка ОДИН на экран: { kind: 'fund' | 'cat' | 'day', value: '…' } либо null.
+   FEAT-044: 'day' ставит тап по графику «Темпа», value — начало дня цикла (мс).
    Двух независимых не бывает намеренно (FEAT-038): фондовые траты вырезаны
    из разбивки ЦИКЛА ещё на бэкенде, значит «Продукты (за цикл) + Отпуск» = ∅
    по построению. Одно поле состояния — и сброс тоже один.
@@ -1378,6 +1467,14 @@ function txCycleSplit(items, cycleStart) {
 function txFilterItems(items, filter, cycleStart) {
   if (!filter) return items;
 
+  /* FEAT-044: день из «Темпа» — ровно те траты, из которых сложено число
+     дня на графике: без фонда, сутки от полуночи (value — начало дня цикла). */
+  if (filter.kind === 'day') {
+    return items.filter(function (it) {
+      return !it.fund && it.ts >= filter.value && it.ts < filter.value + 86400000;
+    });
+  }
+
   if (filter.kind === 'fund') {
     return items.filter(function (it) {
       if (it.fund !== filter.value) return false;
@@ -1412,6 +1509,11 @@ function txChipText(filter, count, covers) {
   if (filter.kind === 'fund') {
     return filter.value + (filter.cat ? ' · ' + filter.cat : '') + ' · из фонда · ' + n;
   }
+  if (filter.kind === 'day') {
+    var d = paceDayLabel(filter.value);
+    if (!covers) return d + ' · в списке не все';
+    return count ? d + ' · ' + n : d;
+  }
   if (!covers)                return filter.value + ' · за цикл · в списке не все';
 
   /* «0 трат» рядом с суммой $40 — противоречие в одной строке. Счёт молчит,
@@ -1432,6 +1534,12 @@ function txEmptyText(filter, covers) {
     return TX_NEVER_SPENT.indexOf(filter.value) !== -1
       ? 'Из этого фонда не тратим — он на сбережения.'
       : 'Среди последних трат по этому фонду ничего нет.';
+  }
+
+  if (filter.kind === 'day') {
+    return covers
+      ? 'В этот день трат не из фондов не было.'
+      : 'Траты этого дня старше окна списка — в последних загруженных записях их нет.';
   }
 
   return covers
@@ -1586,6 +1694,15 @@ function txFilterUsd(filter, list) {
     return seen ? sum : null;
   }
 
+  /* День — число с графика «Темпа» (та же сумма, что в подписи над ним),
+     а не сложение строк списка: у списка своё окно в 200 записей. */
+  if (filter.kind === 'day') {
+    var pl = lastData && lastData.plan;
+    if (!pl || !paceDaily || !paceDaily.days) return null;
+    var k = Math.round((filter.value - pl.cycleStart) / 86400000);
+    return (k >= 0 && k < paceDaily.days.length) ? (Number(paceDaily.days[k]) || 0) : null;
+  }
+
   if (!catData) return null;
   if (filter.value === CAT_UNKNOWN) return Number(catData.unknownUsd) || 0;
 
@@ -1629,6 +1746,12 @@ function txChipNode(list, covers) {
   return chip;
 }
 
+function txFilterTitle(filter) {
+  if (!filter) return 'Последние траты';
+  if (filter.kind === 'day') return 'Траты · ' + paceDayLabel(filter.value);
+  return 'Траты · ' + filter.value + (filter.cat ? ' · ' + filter.cat : '');
+}
+
 function renderTx() {
   var toggle = document.getElementById('txToggle');
   var title  = document.getElementById('txTitle');
@@ -1642,9 +1765,7 @@ function renderTx() {
   toggle.setAttribute('aria-expanded', txExpanded ? 'true' : 'false');
 
   /* Заголовок — единственный след фильтра, когда блок свёрнут. */
-  title.textContent = txFilter
-    ? 'Траты · ' + txFilter.value + (txFilter.cat ? ' · ' + txFilter.cat : '')
-    : 'Последние траты';
+  title.textContent = txFilterTitle(txFilter);
 
   box.className = txExpanded ? '' : 'hidden';
   box.textContent = '';
@@ -1763,6 +1884,7 @@ var TX_REVEAL = 160;
    (repaintFilter перестраивает оба блока), поэтому ищем её по ключу, а не
    держим ссылку. */
 function filterAnchorEl_(kind, value) {
+  if (kind === 'day') return document.getElementById('paceChart');   /* FEAT-044 */
   var list = document.querySelectorAll(
     kind === 'fund' ? '#funds .fund' : '#catBody .cat, #catBody .cat-aside');
   for (var i = 0; i < list.length; i++) {
@@ -1839,6 +1961,7 @@ function scrollToFilter(kind, value) {
 function repaintFilter() {
   renderFunds(lastData && lastData.funds ? lastData.funds : []);
   renderCats();
+  renderPace();
   renderTx();
 }
 
@@ -2357,6 +2480,378 @@ function toggleCatSection() {
   haptic();
 }
 
+/* ===========================================================================
+   FEAT-044 — ТЕМП ЦИКЛА
+
+   Остаток против РУЧНОГО плана X (столбец X недельных строк): пунктир — план
+   «X в день до нуля к ЗП», сплошная — остаток по дням, точка — сегодня,
+   точечная — прогноз при текущем темпе. Запас в шапке считает бэкенд
+   (planReserve_ в money_bot_main.js) — той же функцией, что строка
+   «В плюсе / Отстаем» в отчёте бота; своей копии формулы здесь нет.
+
+   План и запас приходят основным ответом (lastData.plan), траты по дням —
+   ответом part=tx (paceDaily), поэтому до второго блок говорит «Загружаю…»
+   вместо линии, но запас в шапке уже виден.
+
+   Линия прошлых дней восстанавливается ВПЕРЁД от снимка Остатка на начало
+   цикла (MONTH_BUDGET) минус траты без фонда. Всё, что меняло Остаток мимо
+   журнала (входящие BOG, курсы, ручные правки), сложено в ступеньку у точки
+   «сегодня»: прошлое честное, а сегодняшняя точка — реальный Остаток.
+   =========================================================================== */
+
+var PACE_DAY      = 86400000;
+var PACE_FC_DAYS  = 3;        /* раньше прогноз — гадание по одному-двум дням */
+var PACE_H        = 168;
+var PACE_TOP      = 14;
+var PACE_BOT      = 146;
+
+var paceExpanded = false;     /* разворот блока — как у соседей, между запусками не помним */
+var paceDaily    = null;      /* { days: [usd по дням цикла], covers } из part=tx */
+
+/* --- Чистые помощники (покрыты test_miniapp_pace.js) --- */
+
+/* Номер сегодняшнего дня цикла, с нуля. Сутки — от начала цикла (полночь
+   Тбилиси с бэкенда), а не календарь устройства. */
+function paceTodayIdx(cycleStart, nowTs, dayTotal) {
+  var k = Math.floor((nowTs - cycleStart) / PACE_DAY);
+  if (k < 0) k = 0;
+  if (k > dayTotal - 1) k = dayTotal - 1;
+  return k;
+}
+
+/* Подпись дня цикла. Начало дня — полночь ТБИЛИСИ с бэкенда; в поездке
+   телефон в другой зоне прочитал бы её как вечер вчерашнего дня («7 окт»
+   вместо «8 окт»). Середина суток лежит внутри той же даты в любой зоне
+   от −11 до +11 часов от Тбилиси. */
+function paceDayLabel(dayStartTs) {
+  return txShortDate(dayStartTs + PACE_DAY / 2);
+}
+
+/* Остаток на НАЧАЛО дней 0..todayIdx. Нет снимка бюджета — null:
+   рисовать прошлое не от чего. */
+function paceSeries(budget, days, todayIdx) {
+  if (!(Number(budget) > 0) || !days) return null;
+  var out = [Number(budget)], acc = Number(budget);
+  for (var k = 0; k < todayIdx; k++) { acc -= Number(days[k]) || 0; out.push(acc); }
+  return out;
+}
+
+/* План на начало дня k: сумма X дней k..конец цикла. X меняется по неделям,
+   поэтому сумма, а не X × дни. */
+function pacePlanAt(xByDay, k) {
+  var sum = 0;
+  for (var d = Math.max(0, k); d < xByDay.length; d++) sum += Number(xByDay[d]) || 0;
+  return sum;
+}
+
+/* Прогноз остатка к ЗП. Средний день — по ПОЛНЫМ прошедшим дням: сегодняшний
+   ещё не кончился и занизил бы среднее. Сегодня считаем днём не дешевле
+   среднего — уже потраченное не отменить. Первые дни цикла — null. */
+function paceForecast(remainder, days, todayIdx, daysLeft) {
+  if (todayIdx < PACE_FC_DAYS || !days) return null;
+  var full = 0;
+  for (var k = 0; k < todayIdx; k++) full += Number(days[k]) || 0;
+  var avg  = full / todayIdx;
+  var rest = Math.max(0, avg - (Number(days[todayIdx]) || 0)) +
+             avg * Math.max(0, daysLeft - 1);
+  return { end: (Number(remainder) || 0) - rest, avg: avg };
+}
+
+/* Тап по графику → день цикла. Доля ширины → полоса дня; будущее не
+   выбирается — трат там нет. */
+function paceDayAt(frac, dayTotal, todayIdx) {
+  if (!(frac >= 0) || frac > 1) return -1;
+  var k = Math.floor(frac * dayTotal);
+  if (k > dayTotal - 1) k = dayTotal - 1;
+  return k > todayIdx ? -1 : k;
+}
+
+/* Запас на день — тот же, что шкала показывает разницей «доступно − план». */
+function pacePerDay(reserve, daysLeft) {
+  return Math.abs(Number(reserve) || 0) / Math.max(1, daysLeft);
+}
+
+/* Подпись к числу в шапке. Пороги не здесь — status считает бэкенд
+   (planStatus_), тот же, что у бота. */
+function paceLeadLabel(status) {
+  if (status === 'ahead')  return 'запас к плану';
+  if (status === 'behind') return 'перерасход к плану';
+  return 'идём по плану';
+}
+
+/* --- Отрисовка --- */
+
+/* Сумма под общей маской (FEAT-034): точки вместо числа, тап снимает. */
+function paceMoneyNode(usd, cls, signed) {
+  var span = document.createElement('span');
+  span.className = cls + (amountsMasked ? ' masked' : '');
+  if (amountsMasked) {
+    span.textContent = '••••';
+    span.addEventListener('click', toggleAmountsMask);
+  } else {
+    span.innerHTML = (signed && usd > 0 ? '+' : '') + moneyHtml(usd);
+  }
+  return span;
+}
+function paceMoneyText(usd) { return amountsMasked ? '••••' : money(usd); }
+
+/* Число моноширинным в строке над графиком: разделитель разрядов — своим
+   узким узлом (moneyHtml), иначе «$1 585» зияет дырой во всю ширину знака. */
+function paceBold(usd) {
+  var b = document.createElement('b');
+  if (amountsMasked) b.textContent = '••••';
+  else               b.innerHTML = moneyHtml(usd);
+  return b;
+}
+
+function paceText(parent, text) { parent.appendChild(document.createTextNode(text)); }
+
+function paceSvgEl(svg, tag, attrs, style) {
+  var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (var a in attrs) el.setAttribute(a, attrs[a]);
+  for (var s in (style || {})) el.style[s] = style[s];
+  svg.appendChild(el);
+  return el;
+}
+
+function paceDrawChart(box, m) {
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('id', 'paceChart');
+  svg.setAttribute('class', 'pace-chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Остаток по дням цикла против плана');
+  svg.setAttribute('height', PACE_H);
+  box.appendChild(svg);
+
+  /* Ширина — реальная, а не растянутый viewBox: иначе на широком экране
+     вместе с графиком раздулись бы подписи и толщина линий. */
+  var W = Math.round(svg.getBoundingClientRect().width) || 320;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + PACE_H);
+
+  var L = 2, R = W - 2, T = m.dayTotal;
+  function x(k) { return L + (R - L) * k / T; }
+
+  var hi = Math.max(m.planStart, m.remainder, m.series ? Math.max.apply(null, m.series) : 0);
+  var lo = Math.min(0, m.remainder, m.fc ? m.fc.end : 0);
+  if (hi <= lo) hi = lo + 1;
+  function y(v) { return PACE_TOP + (PACE_BOT - PACE_TOP) * (hi - v) / (hi - lo); }
+
+  /* Сетка — только ноль и верх, волосяные. */
+  paceSvgEl(svg, 'line', { x1: L, x2: R, y1: y(0), y2: y(0), 'stroke-width': 1 },
+            { stroke: 'var(--rule-strong)' });
+  paceSvgEl(svg, 'line', { x1: L, x2: R, y1: y(hi), y2: y(hi), 'stroke-width': 1 },
+            { stroke: 'var(--rule)' });
+  for (var w = 7; w < T; w += 7) {
+    paceSvgEl(svg, 'line', { x1: x(w), x2: x(w), y1: y(0), y2: y(0) + 4, 'stroke-width': 1 },
+              { stroke: 'var(--ink-ghost)' });
+  }
+  var top = paceSvgEl(svg, 'text', { x: R, y: y(hi) - 4, 'text-anchor': 'end' });
+  top.textContent = paceMoneyText(hi);
+
+  /* План — ломаная по дням: X меняется по неделям. */
+  var pp = [];
+  for (var k = 0; k <= T; k++) pp.push(x(k) + ',' + y(pacePlanAt(m.xByDay, k)));
+  paceSvgEl(svg, 'polyline', { points: pp.join(' '), fill: 'none', 'stroke-width': 1.5,
+                               'stroke-dasharray': '4 4' }, { stroke: 'var(--ink-ghost)' });
+
+  if (m.fc) {
+    paceSvgEl(svg, 'line', { x1: x(m.todayIdx), y1: y(m.remainder), x2: x(T), y2: y(m.fc.end),
+                             'stroke-width': 2, 'stroke-dasharray': '0.1 4', 'stroke-linecap': 'round' },
+              { stroke: m.fc.end < 0 ? 'var(--brick)' : 'var(--ink-soft)' });
+  }
+
+  /* Остаток: начала дней + ступенька к реальному Остатку у «сегодня». */
+  if (m.series) {
+    var fp = [];
+    for (var j = 0; j < m.series.length; j++) fp.push(x(j) + ',' + y(m.series[j]));
+    fp.push(x(m.todayIdx) + ',' + y(m.remainder));
+    paceSvgEl(svg, 'polyline', { points: fp.join(' '), fill: 'none', 'stroke-width': 2,
+                                 'stroke-linejoin': 'round', 'stroke-linecap': 'round' },
+              { stroke: 'var(--ink)' });
+  }
+
+  if (m.selK !== null) {
+    var sx = m.selK < m.todayIdx ? x(m.selK + 1) : x(m.todayIdx);
+    paceSvgEl(svg, 'line', { x1: sx, x2: sx, y1: PACE_TOP - 6, y2: PACE_BOT, 'stroke-width': 1 },
+              { stroke: 'var(--ink-faint)' });
+    if (m.selK < m.todayIdx && m.series) {
+      paceSvgEl(svg, 'circle', { cx: sx, cy: y(m.series[m.selK + 1]), r: 4, 'stroke-width': 2 },
+                { fill: 'var(--ink)', stroke: 'var(--paper-sunk)' });
+    }
+  }
+
+  paceSvgEl(svg, 'circle', { cx: x(m.todayIdx), cy: y(m.remainder), r: 5, 'stroke-width': 2 },
+            { fill: m.status === 'ahead' ? 'var(--ledger)'
+                  : m.status === 'behind' ? 'var(--brick)' : 'var(--ink-soft)',
+              stroke: 'var(--paper-sunk)' });
+
+  /* Подписи оси: начало, сегодня, ЗП. Сегодня у края — крайнюю прячем,
+     иначе подписи наедут друг на друга. */
+  var xt = x(m.todayIdx), labels = [];
+  if (xt - L > 44) labels.push([L, 'start', paceDayLabel(m.cycleStart)]);
+  labels.push([xt, xt - L <= 44 ? 'start' : (R - xt <= 44 ? 'end' : 'middle'), 'сегодня']);
+  if (R - xt > 44) labels.push([R, 'end', paceDayLabel(m.cycleEnd)]);
+  labels.forEach(function (lb) {
+    var t = paceSvgEl(svg, 'text', { x: lb[0], y: PACE_H - 4, 'text-anchor': lb[1] });
+    t.textContent = lb[2];
+  });
+
+  svg.addEventListener('click', function (ev) {
+    var r = svg.getBoundingClientRect();
+    var frac = (ev.clientX - r.left - L * r.width / W) / ((R - L) * r.width / W);
+    var day = paceDayAt(frac, T, m.todayIdx);
+    if (day < 0) return;
+    pickTxFilter('day', m.cycleStart + day * PACE_DAY);
+  });
+}
+
+function renderPace() {
+  var toggle = document.getElementById('paceToggle');
+  var box    = document.getElementById('paceBody');
+  if (!toggle || !box) return;
+
+  toggle.textContent = paceExpanded ? 'скрыть'
+                     : (txState === 'error' ? 'не загрузились' : 'показать');
+  toggle.setAttribute('aria-expanded', paceExpanded ? 'true' : 'false');
+
+  box.className = paceExpanded ? '' : 'hidden';
+  box.textContent = '';
+  if (!paceExpanded) return;
+
+  var plan = lastData && lastData.plan;
+  if (!plan || !plan.xByDay || !plan.xByDay.length) {
+    box.appendChild(catStateNode(lastStale ? loadingText()
+                                           : 'План цикла не пришёл — нажмите «Обновить».', false));
+    return;
+  }
+
+  var dayTotal  = plan.xByDay.length;
+  var todayIdx  = paceTodayIdx(plan.cycleStart, Date.now(), dayTotal);
+  var remainder = Number(lastData.remainder) || 0;
+
+  /* Шапка: запас — сразу, из основного ответа. */
+  var lead = document.createElement('div');
+  lead.className = 'pace-lead';
+  var left = document.createElement('span');
+  var delta = paceMoneyNode(plan.reserve, 'pace-delta', true);
+  if (!amountsMasked && plan.status !== 'even') delta.className += ' ' + plan.status;
+  left.appendChild(delta);
+  var lbl = document.createElement('span');
+  lbl.className = 'pace-delta-label';
+  lbl.textContent = paceLeadLabel(plan.status);
+  left.appendChild(lbl);
+  lead.appendChild(left);
+  var dayNo = document.createElement('span');
+  dayNo.className = 'pace-day';
+  dayNo.textContent = 'день ' + (todayIdx + 1) + ' из ' + dayTotal;
+  lead.appendChild(dayNo);
+  box.appendChild(lead);
+
+  /* Линия ждёт трат по дням — они едут вторым запросом. */
+  if (txState === 'loading' || txState === 'idle') {
+    box.appendChild(catStateNode(loadingText(), false));
+  } else if (txState === 'error' || !paceDaily || !paceDaily.days) {
+    box.appendChild(catStateNode(txState === 'error' ? (txErrorText || 'Данные не загрузились.')
+                                                     : 'Траты по дням не пришли.', true));
+  }
+
+  var days   = (txState === 'ready' && paceDaily) ? paceDaily.days : null;
+  var covers = !!(paceDaily && paceDaily.covers);
+  var series = (days && covers) ? paceSeries(plan.budget, days, todayIdx) : null;
+  var fc     = (days && covers) ? paceForecast(remainder, days, todayIdx, plan.daysLeft) : null;
+  var selK   = (txFilter && txFilter.kind === 'day')
+             ? Math.round((txFilter.value - plan.cycleStart) / PACE_DAY) : null;
+  if (selK !== null && (selK < 0 || selK > todayIdx)) selK = null;
+
+  if (days) {
+    var ro = document.createElement('div');
+    ro.className = 'pace-readout';
+    if (selK === null) {
+      ro.textContent = 'тап по графику — траты за день';
+    } else {
+      paceText(ro, paceDayLabel(plan.cycleStart + selK * PACE_DAY) + ' · потрачено ');
+      ro.appendChild(paceBold(Number(days[selK]) || 0));
+      var rest = selK < todayIdx ? (series ? series[selK + 1] : null) : remainder;
+      if (rest !== null) {
+        paceText(ro, ' · остаток ');
+        ro.appendChild(paceBold(rest));
+      }
+    }
+    box.appendChild(ro);
+
+    paceDrawChart(box, {
+      dayTotal: dayTotal, todayIdx: todayIdx, xByDay: plan.xByDay,
+      planStart: pacePlanAt(plan.xByDay, 0), series: series, remainder: remainder,
+      fc: fc, selK: selK, status: plan.status,
+      cycleStart: plan.cycleStart, cycleEnd: plan.cycleEnd
+    });
+
+    var lg = document.createElement('div');
+    lg.className = 'pace-legend';
+    [['', 'остаток'], ['plan', 'план ' + money(lastData.planPerDay) + '/день'], ['fc', 'прогноз']]
+      .forEach(function (it) {
+        if (it[0] === 'fc' && !fc) return;
+        if (it[0] === '' && !series) return;
+        var s = document.createElement('span');
+        var key = document.createElement('i');
+        key.className = 'pace-key' + (it[0] ? ' ' + it[0] : '');
+        s.appendChild(key);
+        paceText(s, it[1]);
+        lg.appendChild(s);
+      });
+    box.appendChild(lg);
+  }
+
+  /* Подвал: главный ответ — «сколько можно в день», ниже мелко прогноз. */
+  var foot = document.createElement('div');
+  foot.className = 'pace-foot';
+  var adv = document.createElement('div');
+  var until = ' — до ' + paceDayLabel(plan.cycleEnd);
+  if (plan.status === 'ahead') {
+    paceText(adv, 'Можно тратить на ');
+    adv.appendChild(paceMoneyNode(pacePerDay(plan.reserve, plan.daysLeft), 'num', false));
+    paceText(adv, ' в день больше плана' + until);
+  } else if (plan.status === 'behind') {
+    paceText(adv, 'Чтобы выйти в план, тратить на ');
+    adv.appendChild(paceMoneyNode(pacePerDay(plan.reserve, plan.daysLeft), 'num', false));
+    paceText(adv, ' в день меньше' + until);
+  } else {
+    paceText(adv, 'Идём ровно по плану: ');
+    adv.appendChild(paceMoneyNode(lastData.planPerDay, 'num', false));
+    paceText(adv, ' в день' + until);
+  }
+  foot.appendChild(adv);
+
+  var faint = [];
+  if (fc) {
+    faint.push('при таком темпе к ' + paceDayLabel(plan.cycleEnd) + ' ' +
+               (fc.end >= 0 ? 'останется ≈' : 'не хватит ≈') + paceMoneyText(Math.abs(fc.end)) +
+               ' · средний день ' + paceMoneyText(fc.avg));
+  }
+  if (days && !covers) faint.push('В журнале не все траты цикла — линию прошлых дней и прогноз не рисуем.');
+  if (days && covers && !series) faint.push('Линия прошлых дней появится после первого «📊 Отчёта» в этом цикле.');
+  /* Дни до ЗП: запас считается от J27 (то же число делит «доступно в день»),
+     бот — от календаря ЗП. Разошлись — говорим вслух, иначе бот и экран
+     покажут разный запас молча. */
+  if (plan.calDaysLeft && plan.calDaysLeft !== plan.daysLeft) {
+    faint.push('В таблице до ЗП ' + plan.daysLeft + ' дн. (J27), по календарю — ' +
+               plan.calDaysLeft + '. Проверьте дату ЗП в J27.');
+  }
+  faint.forEach(function (t) {
+    var d = document.createElement('div');
+    d.className = 'pace-faint';
+    d.textContent = t;
+    foot.appendChild(d);
+  });
+  box.appendChild(foot);
+}
+
+function togglePaceSection() {
+  paceExpanded = !paceExpanded;
+  renderPace();
+  haptic();
+}
+
 /* Тексты отказа здесь НЕЙТРАЛЬНЫЕ («данные», не «список трат»): причина одна
    на оба блока, и в блоке категорий сообщение про список трат читалось бы как
    чужое, попавшее не в своё окно.
@@ -2377,6 +2872,7 @@ function loadTx() {
   txSlow  = false;
   renderTx();
   renderCats();
+  renderPace();
 
   var initData = tg && tg.initData ? tg.initData : '';
 
@@ -2386,6 +2882,7 @@ function loadTx() {
       txErrorText = reasonMessage(data.reason).title + '. Данные не загрузились.';
       renderTx();
       renderCats();
+      renderPace();
       return;
     }
     if (!data || !data.tx) {
@@ -2393,15 +2890,18 @@ function loadTx() {
       txErrorText = 'Apps Script ответил, но данных не прислал.';
       renderTx();
       renderCats();
+      renderPace();
       return;
     }
 
     txItems      = data.tx;
     txCycleStart = Number(data.cycleStart) || 0;
     catData      = data.cats || null;    /* FEAT-036: разбивка тем же ответом */
+    paceDaily    = data.daily || null;   /* FEAT-044: траты по дням для «Темпа» */
     txState      = 'ready';
     renderTx();
     renderCats();
+    renderPace();
 
   }, function (kind) {
     txState = 'error';
@@ -2410,11 +2910,13 @@ function loadTx() {
     retryAt = Date.now() + RETRY_COOLDOWN_MS;
     renderTx();
     renderCats();
+    renderPace();
 
   }, function () {
     txSlow = true;      /* подпись в обоих блоках, загрузку не прерываем */
     renderTx();
     renderCats();
+    renderPace();
   });
 }
 
@@ -2429,6 +2931,7 @@ function txFailMain(text) {
   txErrorText = text;
   renderTx();
   renderCats();   /* блоки едут одним запросом — и гаснут вместе */
+  renderPace();
 }
 
 /* --- Сообщения ------------------------------------------------------------ */
@@ -2657,6 +3160,16 @@ function load() {
 
   document.getElementById('txToggle').addEventListener('click', toggleTxSection);
   document.getElementById('catToggle').addEventListener('click', toggleCatSection);
+  document.getElementById('paceToggle').addEventListener('click', togglePaceSection);
+
+  /* График строится по реальной ширине — после поворота или раскрытия
+     вебвью перерисовываем, иначе он остался бы старого размера. */
+  var paceResizeT = null;
+  window.addEventListener('resize', function () {
+    if (!paceExpanded) return;
+    clearTimeout(paceResizeT);
+    paceResizeT = setTimeout(renderPace, 150);
+  });
 
   var saved = localStorage.getItem(LS_URL);
   if (saved) API_URL = saved;
