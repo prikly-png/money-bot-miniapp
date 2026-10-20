@@ -213,6 +213,74 @@ body {
 .gauge-plan { left: 50%; }
 .gauge-delta { font-weight: 500; }
 .gauge-delta.ahead  { color: var(--ledger); }
+
+/* --- Карусель главного блока (FEAT-048) ------------------------------------
+   «Сегодня» и «Темп цикла» — один вопрос «как я иду» в двух масштабах:
+   отклонение на шкале (−$19 в день) × дни до ЗП ≈ запас темпа (−$302).
+   Слайды лежат в ОДНОЙ ячейке сетки: высота блока = высота самого высокого
+   слайда сама собой, без замеров из скрипта, и экран ниже не прыгает при
+   листании. Окно выходит на поля страницы, иначе уезжающий слайд обрезался
+   бы в 20 px от края экрана. Вертикаль отдаём прокрутке (pan-y).
+   ------------------------------------------------------------------------ */
+.car-vp {
+  display: grid;
+  margin: 0 calc(-1 * var(--s5));
+  overflow: hidden;
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  outline: none;
+}
+.car-vp:focus-visible { box-shadow: inset 0 0 0 2px var(--rule-strong); border-radius: var(--r-md); }
+.car-slide {
+  grid-area: 1 / 1;
+  min-width: 0;
+  margin: 0 var(--s5);
+  will-change: transform;
+}
+.car-vp.anim .car-slide { transition: transform 320ms cubic-bezier(0.23, 1, 0.32, 1); }
+.car-vp.anim .car-slide.car-jump { transition: none; }   /* перескок на другую сторону — без пролёта через экран */
+@media (prefers-reduced-motion: reduce) { .car-vp.anim .car-slide { transition: none; } }
+
+.car-value {
+  display: block;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+.car-value.ahead  { color: var(--ledger); }
+.car-value.behind { color: var(--brick); }
+.car-value.masked { color: var(--ink-faint); letter-spacing: 2px; cursor: pointer; }
+.car-chart { height: 60px; margin-top: var(--s3); }
+.car-chart-note { padding-top: var(--s5); font-size: 11px; color: var(--ink-faint); }
+.pace-chart.mini { cursor: default; }
+.car-advice { margin-top: var(--s3); font-size: 12px; color: var(--ink-soft); }
+.car-advice .num { color: var(--ink); font-weight: 500; }
+.car-advice .masked { color: var(--ink-faint); letter-spacing: 2px; cursor: pointer; }
+.car-more {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-top: var(--s1);
+}
+.car-more .pace-faint { margin-top: 0; }
+.car-more .section-note { flex: none; }
+
+.car-dots { display: flex; justify-content: center; padding-top: var(--s2); }
+.car-dot {
+  background: none; border: 0; padding: 8px 4px; margin: 0;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.car-dot i {
+  display: block; width: 6px; height: 6px; border-radius: 3px;
+  background: var(--ink-ghost);
+  transition: width 200ms ease, background-color 200ms ease;
+}
+.car-dot[aria-current="true"] i { width: 16px; background: var(--ink-soft); }
 .gauge-delta.behind { color: var(--brick); }
 
 /* --- Фонды: линованные строки, не карточки -------------------------------
@@ -865,24 +933,33 @@ body {
     <span class="head-cycle" id="cycle"></span>
   </header>
 
-  <section class="hero">
-    <span class="hero-value num" id="perDay" role="button" tabindex="0">—</span>
-    <div class="hero-label">доступно в день</div>
-    <div class="hero-math" id="math"></div>
+  <!-- FEAT-048: главный блок — карусель «Сегодня» ↔ «Темп цикла», по кругу.
+       При каждом открытии — «Сегодня». Пока план цикла не пришёл, второго
+       слайда нет: блок выглядит и ведёт себя как раньше, без точек и свайпа. -->
+  <section class="hero" aria-roledescription="карусель" aria-label="Главный блок">
+    <div class="car-vp" id="carVp" tabindex="0">
+      <div class="car-slide" id="slideToday" aria-roledescription="слайд" aria-label="Сегодня">
+        <span class="hero-value num" id="perDay" role="button" tabindex="0">—</span>
+        <div class="hero-label">доступно в день</div>
+        <div class="hero-math" id="math"></div>
 
-    <div class="gauge" id="gauge">
-      <div class="gauge-top">
-        <span class="gauge-plan" id="gaugePlan"></span>
+        <div class="gauge" id="gauge">
+          <div class="gauge-top">
+            <span class="gauge-plan" id="gaugePlan"></span>
+          </div>
+          <div class="gauge-track">
+            <div class="gauge-line"></div>
+            <div class="gauge-zero"></div>
+            <div class="gauge-mark" id="gaugeMark" style="left:50%"></div>
+          </div>
+          <div class="gauge-bottom">
+            <span class="gauge-delta" id="gaugeDelta"></span>
+          </div>
+        </div>
       </div>
-      <div class="gauge-track">
-        <div class="gauge-line"></div>
-        <div class="gauge-zero"></div>
-        <div class="gauge-mark" id="gaugeMark" style="left:50%"></div>
-      </div>
-      <div class="gauge-bottom">
-        <span class="gauge-delta" id="gaugeDelta"></span>
-      </div>
+      <div class="car-slide hidden" id="slidePace" aria-roledescription="слайд" aria-label="Темп цикла"></div>
     </div>
+    <div class="car-dots hidden" id="carDots" role="group" aria-label="Слайды главного блока"></div>
   </section>
 
   <section>
@@ -899,7 +976,7 @@ body {
        поэтому до второго ответа блок показывает «Загружаю…». -->
   <section class="pace-section">
     <div class="section-head">
-      <span class="section-title">Темп</span>
+      <span class="section-title">Темп по дням</span>
       <button class="section-note" id="paceToggle" type="button">показать</button>
     </div>
     <div id="paceBody" class="hidden"></div>
@@ -963,7 +1040,7 @@ var LS_CACHE = 'miniapp_last_payload';
    deploy_miniapp.sh кладёт его же рядом в version.json, и открытая старая
    копия, сверившись с ним, перезагружается сама. Номер виден в подвале —
    сразу понятно, что открыто. */
-var APP_VERSION = '2.35.1';
+var APP_VERSION = '2.38';
 var SS_RELOAD   = 'miniapp_reload_to';   /* к какой версии уже пробовали перезагрузиться */
 var appNewer    = '';                    /* на сайте новее, но перезагрузка не помогла */
 
@@ -2575,6 +2652,7 @@ var PACE_ONEOFF_X = 3;        /* день дороже 3 медиан — раз
 var PACE_H        = 168;
 var PACE_TOP      = 14;
 var PACE_BOT      = 146;
+var PACE_MINI_H   = 60;       /* график на слайде карусели (FEAT-048) */
 
 var paceExpanded = false;     /* разворот блока — как у соседей, между запусками не помним */
 var paceDaily    = null;      /* { days: [usd по дням цикла], covers } из part=tx */
@@ -2774,19 +2852,24 @@ function paceSvgEl(svg, tag, attrs, style) {
   return el;
 }
 
+/* m.mini (FEAT-048) — тот же график для слайда карусели: ниже, без подписей
+   и без ведения пальцем. Геометрия одна, чтобы слайд и блок не разошлись. */
 function paceDrawChart(box, m) {
+  var H   = m.mini ? PACE_MINI_H : PACE_H;
+  var TOP = m.mini ? 6 : PACE_TOP;
+  var BOT = m.mini ? PACE_MINI_H - 8 : PACE_BOT;
   var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('id', 'paceChart');
-  svg.setAttribute('class', 'pace-chart');
+  if (!m.mini) svg.setAttribute('id', 'paceChart');
+  svg.setAttribute('class', m.mini ? 'pace-chart mini' : 'pace-chart');
   svg.setAttribute('role', 'img');
   svg.setAttribute('aria-label', 'Остаток по дням цикла против плана');
-  svg.setAttribute('height', PACE_H);
+  svg.setAttribute('height', H);
   box.appendChild(svg);
 
   /* Ширина — реальная, а не растянутый viewBox: иначе на широком экране
      вместе с графиком раздулись бы подписи и толщина линий. */
   var W = Math.round(svg.getBoundingClientRect().width) || 320;
-  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + PACE_H);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
 
   var L = 2, R = W - 2, T = m.dayTotal;
   function x(k) { return L + (R - L) * k / T; }
@@ -2794,7 +2877,7 @@ function paceDrawChart(box, m) {
   var hi = Math.max(m.planStart, m.remainder, m.series ? Math.max.apply(null, m.series) : 0);
   var lo = Math.min(0, m.remainder, m.fc ? Math.min.apply(null, m.fc.after) : 0);
   if (hi <= lo) hi = lo + 1;
-  function y(v) { return PACE_TOP + (PACE_BOT - PACE_TOP) * (hi - v) / (hi - lo); }
+  function y(v) { return TOP + (BOT - TOP) * (hi - v) / (hi - lo); }
 
   /* Сетка — только ноль и верх, волосяные. */
   paceSvgEl(svg, 'line', { x1: L, x2: R, y1: y(0), y2: y(0), 'stroke-width': 1 },
@@ -2805,8 +2888,10 @@ function paceDrawChart(box, m) {
     paceSvgEl(svg, 'line', { x1: x(w), x2: x(w), y1: y(0), y2: y(0) + 4, 'stroke-width': 1 },
               { stroke: 'var(--ink-ghost)' });
   }
-  var top = paceSvgEl(svg, 'text', { x: R, y: y(hi) - 4, 'text-anchor': 'end' });
-  top.textContent = paceMoneyText(hi);
+  if (!m.mini) {
+    var top = paceSvgEl(svg, 'text', { x: R, y: y(hi) - 4, 'text-anchor': 'end' });
+    top.textContent = paceMoneyText(hi);
+  }
 
   /* План — ломаная по дням: X меняется по неделям. */
   var pp = [];
@@ -2836,6 +2921,14 @@ function paceDrawChart(box, m) {
     paceSvgEl(svg, 'polyline', { points: fp.join(' '), fill: 'none', 'stroke-width': 2,
                                  'stroke-linejoin': 'round', 'stroke-linecap': 'round' },
               { stroke: 'var(--ink)' });
+  }
+
+  if (m.mini) {
+    paceSvgEl(svg, 'circle', { cx: x(m.todayIdx), cy: y(m.remainder), r: 4, 'stroke-width': 2 },
+              { fill: m.status === 'ahead' ? 'var(--ledger)'
+                    : m.status === 'behind' ? 'var(--brick)' : 'var(--ink-soft)',
+                stroke: 'var(--paper)' });
+    return;
   }
 
   /* Отметка дня — одни и те же узлы двигаются за пальцем: пересборка
@@ -2910,7 +3003,126 @@ function paceDrawChart(box, m) {
   svg.addEventListener('pointercancel', function () { finish(false); });
 }
 
+/* Всё, что «Темп» считает, — одной функцией: слайд карусели (FEAT-048) и
+   подробный блок рисуют из одной модели и разойтись не могут. null — плана
+   цикла нет (старый бэкенд, кеш без plan). */
+function paceModel() {
+  var plan = lastData && lastData.plan;
+  if (!plan || !plan.xByDay || !plan.xByDay.length) return null;
+
+  var dayTotal  = plan.xByDay.length;
+  var todayIdx  = paceTodayIdx(plan.cycleStart, Date.now(), dayTotal);
+  var remainder = Number(lastData.remainder) || 0;
+
+  var days   = (txState === 'ready' && paceDaily) ? paceDaily.days : null;
+  var covers = !!(paceDaily && paceDaily.covers);
+  var series = (days && covers) ? paceSeries(remainder, days, todayIdx) : null;
+  /* Прогноз (v2.35): «обычный день» по полным дням этого и прошлого цикла
+     без подписок и разовых крупных трат + подписки по расписанию. Старый
+     бэкенд без organic — берём days, прогноз просто будет грубее. */
+  var organic = (paceDaily && paceDaily.organic) ? paceDaily.organic : days;
+  var typ = (days && covers)
+          ? paceTypical(paceSamples(organic, todayIdx, plan.cycleStart,
+                                    paceDaily.prevOrganic, paceDaily.prevStart))
+          : null;
+  var fc  = typ ? paceForecastPath(remainder, todayIdx, dayTotal, plan.cycleStart,
+                                   Number(organic[todayIdx]) || 0, typ, plan.subs || [])
+                : null;
+  return { plan: plan, dayTotal: dayTotal, todayIdx: todayIdx, remainder: remainder,
+           days: days, covers: covers, series: series, typ: typ, fc: fc };
+}
+
+/* Главный совет темпа — «сколько можно в день». Один текст на слайд и блок. */
+function paceAdviceNode(plan) {
+  var adv = document.createElement('div');
+  var until = ' — до ' + paceDayLabel(plan.cycleEnd);
+  if (plan.status === 'ahead') {
+    paceText(adv, 'Можно тратить на ');
+    adv.appendChild(paceMoneyNode(pacePerDay(plan.reserve, plan.daysLeft), 'num', false));
+    paceText(adv, ' в день больше плана' + until);
+  } else if (plan.status === 'behind') {
+    paceText(adv, 'Чтобы выйти в план, тратить на ');
+    adv.appendChild(paceMoneyNode(pacePerDay(plan.reserve, plan.daysLeft), 'num', false));
+    paceText(adv, ' в день меньше' + until);
+  } else {
+    paceText(adv, 'Идём ровно по плану: ');
+    adv.appendChild(paceMoneyNode(lastData.planPerDay, 'num', false));
+    paceText(adv, ' в день' + until);
+  }
+  return adv;
+}
+
+function paceForecastText(pm) {
+  return 'прогноз к ' + paceDayLabel(pm.plan.cycleEnd) + ': ' +
+         (pm.fc.end >= 0 ? 'останется ≈' : 'не хватит ≈') + paceMoneyText(Math.abs(pm.fc.end));
+}
+
+/* Слайд «Темп цикла» в карусели (FEAT-048): запас, маленький график БЕЗ
+   ведения пальцем (горизонтальный жест здесь занят свайпом карусели),
+   совет и вход в подробный блок. Нет плана — слайда нет. */
+function renderPaceMini() {
+  var slide = document.getElementById('slidePace');
+  if (!slide) return;
+  var pm = paceModel();
+  slide.classList.toggle('hidden', !pm);
+  slide.textContent = '';
+  if (!pm) return;
+  var plan = pm.plan;
+
+  /* Отдельной строки-заголовка нет намеренно: каждая строка здесь —
+     высота всего блока, а «Сегодня» ниже ростом, и под его шкалой зияла бы
+     пустота. Что это темп, говорят подпись и сам график. */
+  var val = paceMoneyNode(plan.reserve, 'car-value', true);
+  if (!amountsMasked && plan.status !== 'even') val.className += ' ' + plan.status;
+  slide.appendChild(val);
+  var lbl = document.createElement('div');
+  lbl.className = 'hero-label';
+  lbl.textContent = paceLeadLabel(plan.status) + ' · день ' + (pm.todayIdx + 1) + ' из ' + pm.dayTotal;
+  slide.appendChild(lbl);
+
+  /* Высота графика постоянная и до прихода трат — иначе блок вырос бы
+     под ногами, когда второй ответ догонит первый. */
+  var chart = document.createElement('div');
+  chart.className = 'car-chart';
+  slide.appendChild(chart);
+  if (pm.days) {
+    paceDrawChart(chart, {
+      mini: true, dayTotal: pm.dayTotal, todayIdx: pm.todayIdx, xByDay: plan.xByDay,
+      planStart: pacePlanAt(plan.xByDay, 0), series: pm.series, remainder: pm.remainder,
+      fc: pm.fc, status: plan.status
+    });
+  } else {
+    var note = document.createElement('div');
+    note.className = 'car-chart-note';
+    note.textContent = (txState === 'error') ? 'График не загрузился — подробнее ниже.'
+                     : (txState === 'ready') ? 'Траты по дням не пришли.' : 'Загружаю график…';
+    chart.appendChild(note);
+  }
+
+  var adv = document.createElement('div');
+  adv.className = 'car-advice';
+  adv.appendChild(paceAdviceNode(plan));
+  slide.appendChild(adv);
+
+  var row = document.createElement('div');
+  row.className = 'car-more';
+  var f = document.createElement('span');
+  f.className = 'pace-faint';
+  f.textContent = pm.fc ? paceForecastText(pm) : '';
+  row.appendChild(f);
+  var more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'section-note';
+  more.textContent = 'по дням ↓';
+  more.addEventListener('click', openPaceSection);
+  row.appendChild(more);
+  slide.appendChild(row);
+}
+
 function renderPace() {
+  renderPaceMini();
+  carLayout(0, false);   /* слайд темпа мог появиться или пропасть */
+
   var toggle = document.getElementById('paceToggle');
   var box    = document.getElementById('paceBody');
   if (!toggle || !box) return;
@@ -2923,16 +3135,17 @@ function renderPace() {
   box.textContent = '';
   if (!paceExpanded) return;
 
-  var plan = lastData && lastData.plan;
-  if (!plan || !plan.xByDay || !plan.xByDay.length) {
+  var pm = paceModel();
+  if (!pm) {
     box.appendChild(catStateNode(lastStale ? loadingText()
                                            : 'План цикла не пришёл — нажмите «Обновить».', false));
     return;
   }
 
-  var dayTotal  = plan.xByDay.length;
-  var todayIdx  = paceTodayIdx(plan.cycleStart, Date.now(), dayTotal);
-  var remainder = Number(lastData.remainder) || 0;
+  var plan      = pm.plan;
+  var dayTotal  = pm.dayTotal;
+  var todayIdx  = pm.todayIdx;
+  var remainder = pm.remainder;
 
   /* Шапка: запас — сразу, из основного ответа. */
   var lead = document.createElement('div');
@@ -2960,20 +3173,11 @@ function renderPace() {
                                                      : 'Траты по дням не пришли.', true));
   }
 
-  var days   = (txState === 'ready' && paceDaily) ? paceDaily.days : null;
-  var covers = !!(paceDaily && paceDaily.covers);
-  var series = (days && covers) ? paceSeries(remainder, days, todayIdx) : null;
-  /* Прогноз (v2.35): «обычный день» по полным дням этого и прошлого цикла
-     без подписок и разовых крупных трат + подписки по расписанию. Старый
-     бэкенд без organic — берём days, прогноз просто будет грубее. */
-  var organic = (paceDaily && paceDaily.organic) ? paceDaily.organic : days;
-  var typ = (days && covers)
-          ? paceTypical(paceSamples(organic, todayIdx, plan.cycleStart,
-                                    paceDaily.prevOrganic, paceDaily.prevStart))
-          : null;
-  var fc  = typ ? paceForecastPath(remainder, todayIdx, dayTotal, plan.cycleStart,
-                                   Number(organic[todayIdx]) || 0, typ, plan.subs || [])
-                : null;
+  var days   = pm.days;
+  var covers = pm.covers;
+  var series = pm.series;
+  var typ    = pm.typ;
+  var fc     = pm.fc;
   var selK   = (txFilter && txFilter.kind === 'day')
              ? Math.round((txFilter.value - plan.cycleStart) / PACE_DAY) : null;
   if (selK !== null && (selK < 0 || selK > todayIdx)) selK = null;
@@ -3013,27 +3217,11 @@ function renderPace() {
   /* Подвал: главный ответ — «сколько можно в день», ниже мелко прогноз. */
   var foot = document.createElement('div');
   foot.className = 'pace-foot';
-  var adv = document.createElement('div');
-  var until = ' — до ' + paceDayLabel(plan.cycleEnd);
-  if (plan.status === 'ahead') {
-    paceText(adv, 'Можно тратить на ');
-    adv.appendChild(paceMoneyNode(pacePerDay(plan.reserve, plan.daysLeft), 'num', false));
-    paceText(adv, ' в день больше плана' + until);
-  } else if (plan.status === 'behind') {
-    paceText(adv, 'Чтобы выйти в план, тратить на ');
-    adv.appendChild(paceMoneyNode(pacePerDay(plan.reserve, plan.daysLeft), 'num', false));
-    paceText(adv, ' в день меньше' + until);
-  } else {
-    paceText(adv, 'Идём ровно по плану: ');
-    adv.appendChild(paceMoneyNode(lastData.planPerDay, 'num', false));
-    paceText(adv, ' в день' + until);
-  }
-  foot.appendChild(adv);
+  foot.appendChild(paceAdviceNode(plan));
 
   var faint = [];
   if (fc) {
-    faint.push('прогноз к ' + paceDayLabel(plan.cycleEnd) + ': ' +
-               (fc.end >= 0 ? 'останется ≈' : 'не хватит ≈') + paceMoneyText(Math.abs(fc.end)));
+    faint.push(paceForecastText(pm));
     faint.push((typ.split
                  ? 'обычный день: будни ' + paceMoneyText(typ.weekday) + ', выходные ' + paceMoneyText(typ.weekend)
                  : 'обычный день ' + paceMoneyText(typ.typical)) +
@@ -3069,6 +3257,142 @@ function togglePaceSection() {
   paceExpanded = !paceExpanded;
   renderPace();
   haptic();
+}
+
+/* --- Карусель главного блока (FEAT-048) ----------------------------------
+   По кругу (решение пользователя 20.10.2026). При двух слайдах сосед один и
+   тот же с обеих сторон — ставим его туда, куда тянут палец. Слайд, который
+   перескакивает на другую сторону, едет без анимации, иначе пролетел бы
+   через экран. При каждом открытии — «Сегодня»: между запусками не помним. */
+var CAR_GAP   = 24;
+var carIdx    = 0;
+var carRel    = [0, 1];
+var carDrag   = null;
+var carNoClick = false;   /* после свайпа гасим клик, иначе тап по сумме сменил бы валюту */
+
+function carSlides() {
+  return [document.getElementById('slideToday'), document.getElementById('slidePace')];
+}
+function carCount() {
+  var p = document.getElementById('slidePace');
+  return (p && !p.classList.contains('hidden')) ? 2 : 1;
+}
+function carRelOf(i, n, dx) {
+  var d = ((i - carIdx) % n + n) % n;
+  if (n === 2) return (d === 1 && dx > 0) ? -1 : d;
+  return d > n / 2 ? d - n : d;
+}
+
+function carLayout(dx, animate) {
+  var vp = document.getElementById('carVp');
+  if (!vp) return;
+  var list = carSlides(), n = carCount();
+  if (carIdx >= n) carIdx = 0;
+  vp.classList.toggle('anim', !!animate);
+  var step = list[0].offsetWidth + CAR_GAP;
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (i >= n) { s.style.transform = ''; continue; }
+    var rel = n < 2 ? 0 : carRelOf(i, n, dx);
+    s.classList.toggle('car-jump', Math.abs(rel - carRel[i]) > 1);
+    carRel[i] = rel;
+    s.style.transform = (rel || dx) ? 'translateX(' + (rel * step + dx) + 'px)' : '';
+    if (rel !== 0) { s.setAttribute('aria-hidden', 'true'); s.setAttribute('inert', ''); }
+    else           { s.removeAttribute('aria-hidden'); s.removeAttribute('inert'); }
+  }
+  carRenderDots(n);
+}
+
+function carRenderDots(n) {
+  var box = document.getElementById('carDots');
+  if (!box) return;
+  box.classList.toggle('hidden', n < 2);
+  box.textContent = '';
+  if (n < 2) return;
+  var list = carSlides();
+  for (var i = 0; i < n; i++) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'car-dot';
+    b.setAttribute('aria-label', list[i].getAttribute('aria-label'));
+    b.setAttribute('aria-current', i === carIdx ? 'true' : 'false');
+    b.appendChild(document.createElement('i'));
+    b.addEventListener('click', carGoTo.bind(null, i));
+    box.appendChild(b);
+  }
+}
+
+function carGoTo(i) {
+  if (i === carIdx) return;
+  carIdx = i;
+  carLayout(0, true);
+  haptic();
+}
+function carGo(step) {
+  var n = carCount();
+  if (n < 2) return;
+  carGoTo((carIdx + step + n) % n);
+}
+
+/* Ось жеста решаем после 8 px: вертикаль — прокрутке (браузер пришлёт
+   pointercancel), горизонталь — карусели. Слайд листается, если протянули
+   на пятую часть ширины или резко смахнули. */
+function carBind() {
+  var vp = document.getElementById('carVp');
+  if (!vp) return;
+  vp.addEventListener('pointerdown', function (ev) {
+    if (ev.button !== 0 || carCount() < 2) return;
+    carDrag = { x0: ev.clientX, y0: ev.clientY, t0: ev.timeStamp, axis: null, dx: 0, id: ev.pointerId };
+  });
+  vp.addEventListener('pointermove', function (ev) {
+    if (!carDrag) return;
+    var dx = ev.clientX - carDrag.x0, dy = ev.clientY - carDrag.y0;
+    if (!carDrag.axis) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+        carDrag.axis = 'x';
+        try { vp.setPointerCapture(carDrag.id); } catch (e) {}
+      } else if (Math.abs(dy) > 8) {
+        carDrag.axis = 'y';
+      }
+    }
+    if (carDrag.axis !== 'x') return;
+    carDrag.dx = dx;
+    carLayout(dx, false);
+  });
+  vp.addEventListener('pointerup', function (ev) {
+    var d = carDrag;
+    carDrag = null;
+    if (!d || d.axis !== 'x') return;
+    carNoClick = true;
+    var w = carSlides()[0].offsetWidth || 1;
+    var v = d.dx / Math.max(1, ev.timeStamp - d.t0);
+    var step = (d.dx < -w * 0.2 || v < -0.45) ? 1 : (d.dx > w * 0.2 || v > 0.45) ? -1 : 0;
+    if (step) carGo(step); else carLayout(0, true);
+  });
+  vp.addEventListener('pointercancel', function () {
+    var d = carDrag;
+    carDrag = null;
+    if (d && d.axis === 'x') carLayout(0, true);
+  });
+  vp.addEventListener('click', function (ev) {
+    if (!carNoClick) return;
+    carNoClick = false;
+    ev.stopPropagation();
+    ev.preventDefault();
+  }, true);
+  vp.addEventListener('keydown', function (ev) {
+    if (ev.target !== vp) return;
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); carGo(1); }
+    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); carGo(-1); }
+  });
+}
+
+/* «по дням ↓» со слайда: раскрыть подробный блок и подвести к нему. */
+function openPaceSection() {
+  if (!paceExpanded) { paceExpanded = true; renderPace(); }
+  haptic();
+  var sec = document.querySelector('.pace-section');
+  if (sec && sec.scrollIntoView) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* Тексты отказа здесь НЕЙТРАЛЬНЫЕ («данные», не «список трат»): причина одна
@@ -3379,12 +3703,14 @@ function load() {
   document.getElementById('txToggle').addEventListener('click', toggleTxSection);
   document.getElementById('catToggle').addEventListener('click', toggleCatSection);
   document.getElementById('paceToggle').addEventListener('click', togglePaceSection);
+  carBind();
 
   /* График строится по реальной ширине — после поворота или раскрытия
-     вебвью перерисовываем, иначе он остался бы старого размера. */
+     вебвью перерисовываем, иначе он остался бы старого размера. Мини-график
+     слайда (FEAT-048) виден всегда, поэтому и при свёрнутом блоке. */
   var paceResizeT = null;
   window.addEventListener('resize', function () {
-    if (!paceExpanded) return;
+    carLayout(0, false);
     clearTimeout(paceResizeT);
     paceResizeT = setTimeout(renderPace, 150);
   });
