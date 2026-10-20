@@ -238,10 +238,10 @@ body {
   margin: 0 var(--s5);
   will-change: transform;
 }
-/* Доводка после отпускания: длительность ставит скрипт (--car-dur) по скорости
-   пальца — быстрый флик доезжает быстро, медленный плавно; кривая мягкая,
-   без рывка в начале (v2.38 начинал доводку скачком). */
-.car-vp.anim .car-slide { transition: transform var(--car-dur, 340ms) cubic-bezier(0.22, 0.61, 0.36, 1); }
+/* Доводка после отпускания: слайд стартует со скоростью пальца и плавно
+   тормозит. Длительность ставит скрипт (--car-dur), кривая — easeOutQuad:
+   пологий старт (наклон 1.84), без «примагничивания» (живой тест v2.38.2). */
+.car-vp.anim .car-slide { transition: transform var(--car-dur, 420ms) cubic-bezier(0.25, 0.46, 0.45, 0.94); }
 .car-vp.anim .car-slide.car-jump { transition: none; }   /* перескок на другую сторону — без пролёта через экран */
 @media (prefers-reduced-motion: reduce) { .car-vp.anim .car-slide { transition: none; } }
 
@@ -1038,7 +1038,7 @@ var LS_CACHE = 'miniapp_last_payload';
    deploy_miniapp.sh кладёт его же рядом в version.json, и открытая старая
    копия, сверившись с ним, перезагружается сама. Номер виден в подвале —
    сразу понятно, что открыто. */
-var APP_VERSION = '2.38.2';
+var APP_VERSION = '2.38.3';
 var SS_RELOAD   = 'miniapp_reload_to';   /* к какой версии уже пробовали перезагрузиться */
 var appNewer    = '';                    /* на сайте новее, но перезагрузка не помогла */
 
@@ -3335,6 +3335,7 @@ function togglePaceSection() {
    перескакивает на другую сторону, едет без анимации, иначе пролетел бы
    через экран. При каждом открытии — «Сегодня»: между запусками не помним. */
 var CAR_GAP   = 24;
+var CAR_EASE_SLOPE = 0.46 / 0.25;   /* начальный наклон кривой доводки (см. .car-vp.anim) */
 var carIdx    = 0;
 var carRel    = [0, 1];
 var carDrag   = null;
@@ -3414,7 +3415,8 @@ function carGoTo(i) {
   carPark = -(carRel[i] || 1);   /* уходящий — в сторону, противоположную приходу нового */
   carIdx = i;
   carLayout(0, true);
-  haptic();
+  /* Без вибрации (решение пользователя 20.10): смену слайда и так видно
+     и чувствуется пальцем; системные карусели iOS тоже не вибрируют. */
 }
 /* Точки и стрелки — без пальца, длительность стандартная. */
 function carStdDur() {
@@ -3450,10 +3452,13 @@ function carBind() {
     var v = (d.dx - first[0]) / Math.max(16, t - first[1]);
     var w = d.step - CAR_GAP;
     var step = (d.dx < -w * 0.15 || v < -0.3) ? 1 : (d.dx > w * 0.15 || v > 0.3) ? -1 : 0;
-    /* Остаток пути / скорость пальца, в рамках 180–380 мс: доводка
-       продолжает движение с той же скоростью, а не начинает своё. */
+    /* Длительность — чтобы слайд СТАРТОВАЛ со скоростью пальца: у кривой
+       начальная скорость = наклон × путь / время, отсюда время = наклон ×
+       путь / скорость пальца. v2.38.2 считал без наклона и с потолком 380 мс —
+       слайд в момент отпускания рвался в 2–5 раз быстрее пальца. Рамки
+       300–600 мс: короче — рывок, дольше — вязко. */
     var rem = step ? d.step - Math.abs(d.dx) : Math.abs(d.dx);
-    var dur = Math.abs(v) > 0.3 ? Math.max(180, Math.min(380, rem / Math.abs(v))) : 340;
+    var dur = Math.abs(v) > 0.05 ? Math.max(300, Math.min(600, CAR_EASE_SLOPE * rem / Math.abs(v))) : 450;
     var vp2 = document.getElementById('carVp');
     if (vp2) vp2.style.setProperty('--car-dur', Math.round(dur) + 'ms');
     if (step && carCount() > 1) {
