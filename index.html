@@ -238,12 +238,7 @@ body {
   margin: 0 var(--s5);
   will-change: transform;
 }
-/* Доводка после отпускания: слайд стартует со скоростью пальца и плавно
-   тормозит. Длительность ставит скрипт (--car-dur), кривая — easeOutQuad:
-   пологий старт (наклон 1.84), без «примагничивания» (живой тест v2.38.2). */
-.car-vp.anim .car-slide { transition: transform var(--car-dur, 420ms) cubic-bezier(0.25, 0.46, 0.45, 0.94); }
-.car-vp.anim .car-slide.car-jump { transition: none; }   /* перескок на другую сторону — без пролёта через экран */
-@media (prefers-reduced-motion: reduce) { .car-vp.anim .car-slide { transition: none; } }
+/* Анимации CSS у слайдов нет: и палец, и доводку (пружину) ведёт скрипт. */
 
 .car-value {
   display: block;
@@ -1038,7 +1033,7 @@ var LS_CACHE = 'miniapp_last_payload';
    deploy_miniapp.sh кладёт его же рядом в version.json, и открытая старая
    копия, сверившись с ним, перезагружается сама. Номер виден в подвале —
    сразу понятно, что открыто. */
-var APP_VERSION = '2.38.3';
+var APP_VERSION = '2.38.4';
 var SS_RELOAD   = 'miniapp_reload_to';   /* к какой версии уже пробовали перезагрузиться */
 var appNewer    = '';                    /* на сайте новее, но перезагрузка не помогла */
 
@@ -3330,17 +3325,28 @@ function togglePaceSection() {
 }
 
 /* --- Карусель главного блока (FEAT-048) ----------------------------------
-   По кругу (решение пользователя 20.10.2026). При двух слайдах сосед один и
-   тот же с обеих сторон — ставим его туда, куда тянут палец. Слайд, который
-   перескакивает на другую сторону, едет без анимации, иначе пролетел бы
-   через экран. При каждом открытии — «Сегодня»: между запусками не помним. */
-var CAR_GAP   = 24;
-var CAR_EASE_SLOPE = 0.46 / 0.25;   /* начальный наклон кривой доводки (см. .car-vp.anim) */
+   По кругу (решение пользователя 20.10.2026). При каждом открытии —
+   «Сегодня»: между запусками не помним.
+
+   Положение карусели — одно число carPos: сдвиг текущего слайда от его места
+   (0 — стоит ровно). Палец меняет его напрямую, доводку после отпускания
+   ведёт ПРУЖИНА, а не CSS-анимация. CSS-кривая не умеет продолжить движение
+   пальца: v2.38–v2.38.3 то рвались вперёд, то «примагничивались» (живые
+   тесты 20.10). Пружина стартует ровно со скорости пальца и тормозит сама,
+   как системные карусели iOS. */
+var CAR_GAP      = 24;
+/* Жёсткость пружины, рад/с. 13 разгоняла слайд из покоя до 1 px/мс за 30 мс —
+   отпускание почти остановившегося пальца ощущалось как «примагнитило».
+   10: разгон мягче, пик ~0.77 px/мс через 0.1 с, видимая остановка ~0.45 с. */
+var CAR_SPRING_W = 10;
 var carIdx    = 0;
 var carRel    = [0, 1];
 var carDrag   = null;
 var carNoClick = false;   /* после свайпа гасим клик, иначе тап по сумме сменил бы валюту */
 var carPark   = 1;        /* где в покое ждёт соседний слайд при двух слайдах: 1 справа, −1 слева */
+var carPos    = 0;        /* текущий сдвиг, px */
+var carStep   = 0;        /* ширина слайда + зазор; 0 — перемерить */
+var carSpring = 0;        /* id кадра доводки, 0 — стоим */
 
 function carSlides() {
   return [document.getElementById('slideToday'), document.getElementById('slidePace')];
@@ -3349,34 +3355,73 @@ function carCount() {
   var p = document.getElementById('slidePace');
   return (p && !p.classList.contains('hidden')) ? 2 : 1;
 }
-/* При двух слайдах сосед в покое стоит там, куда ушёл (carPark): после
-   свайпа влево уходящий слайд уезжает ВЛЕВО и там остаётся. v2.38 ставил его
-   в покое всегда справа — и на доводке он летел через весь экран навстречу
-   приходящему (живой тест v2.38.1: «анимация резкая»). */
+function carStepPx() {
+  if (!carStep) carStep = carSlides()[0].offsetWidth + CAR_GAP;
+  return carStep;
+}
+/* При двух слайдах сосед стоит с той стороны, куда сдвинут текущий (знак dx),
+   а в покое — там, куда ушёл (carPark). Пружина не перелетает через ноль,
+   поэтому сосед за доводку сторону не меняет и не летит через экран. */
 function carRelOf(i, n, dx) {
   var d = ((i - carIdx) % n + n) % n;
   if (n === 2) return d === 0 ? 0 : (dx > 0 ? -1 : dx < 0 ? 1 : carPark);
   return d > n / 2 ? d - n : d;
 }
 
-function carLayout(dx, animate) {
-  var vp = document.getElementById('carVp');
-  if (!vp) return;
+/* Критически демпфированная пружина к нулю: x(t) = (x0 + (v + w·x0)·t)·e^(−w·t).
+   Стартует из x0 со скоростью v (px/с) и приходит в ноль без колебаний. */
+function carSpringAt(x0, v, t) {
+  return (x0 + (v + CAR_SPRING_W * x0) * t) * Math.exp(-CAR_SPRING_W * t);
+}
+/* Скорость к нулю больше w·|x0| перебросила бы слайд через место — отскок.
+   Такой флик гасим до предельной: слайд доезжает быстро, но не пружинит. */
+function carSpringV0(x0, v) {
+  if (x0 * v < 0 && Math.abs(v) > CAR_SPRING_W * Math.abs(x0)) return -CAR_SPRING_W * x0;
+  return v;
+}
+
+/* Кадр: только сдвиг слайдов. Ни точек, ни замеров (v2.38 пересобирал точки
+   на каждое движение пальца — рывки). */
+function carApply(dx) {
   var list = carSlides(), n = carCount();
   if (carIdx >= n) carIdx = 0;
-  vp.classList.toggle('anim', !!animate);
-  var step = list[0].offsetWidth + CAR_GAP;
+  var step = carStepPx();
+  carPos = dx;
   for (var i = 0; i < list.length; i++) {
     var s = list[i];
     if (i >= n) { s.style.transform = ''; continue; }
     var rel = n < 2 ? 0 : carRelOf(i, n, dx);
-    s.classList.toggle('car-jump', Math.abs(rel - carRel[i]) > 1);
     carRel[i] = rel;
     s.style.transform = (rel || dx) ? 'translateX(' + (rel * step + dx) + 'px)' : '';
     if (rel !== 0) { s.setAttribute('aria-hidden', 'true'); s.setAttribute('inert', ''); }
     else           { s.removeAttribute('aria-hidden'); s.removeAttribute('inert'); }
   }
-  carRenderDots(n);
+}
+
+/* Покой: после перерисовки, поворота, появления/пропажи слайда темпа.
+   Идущую доводку и жест не трогаем — только точки. */
+function carLayout() {
+  if (!document.getElementById('carVp')) return;
+  carStep = 0;
+  if (!carSpring && !(carDrag && carDrag.axis === 'x')) carApply(0);
+  carRenderDots(carCount());
+}
+
+function carSettle(x0, v) {
+  if (carSpring) { cancelAnimationFrame(carSpring); carSpring = 0; }
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || Math.abs(x0) < 0.5) { carApply(0); return; }
+  /* Отсчёт — с момента отпускания, а не с первого кадра: иначе первый кадр
+     доводки стоит на месте, и на стыке пальца и пружины слайд замирает. */
+  var v0 = carSpringV0(x0, (v || 0) * 1000), t0 = performance.now();
+  function frame(now) {
+    var t = Math.max(0, (now - t0) / 1000);
+    var x = carSpringAt(x0, v0, t);
+    if (t > 0.05 && Math.abs(x) < 0.5) { carSpring = 0; carApply(0); return; }
+    carApply(x);
+    carSpring = requestAnimationFrame(frame);
+  }
+  carSpring = requestAnimationFrame(frame);
 }
 
 function carRenderDots(n) {
@@ -3393,53 +3438,48 @@ function carRenderDots(n) {
     b.setAttribute('aria-label', list[i].getAttribute('aria-label'));
     b.setAttribute('aria-current', i === carIdx ? 'true' : 'false');
     b.appendChild(document.createElement('i'));
-    b.addEventListener('click', function (k) { return function () { carStdDur(); carGoTo(k); }; }(i));
+    b.addEventListener('click', carGoTo.bind(null, i, undefined, 0));
     box.appendChild(b);
   }
 }
 
-/* Кадр перетаскивания — только сдвиг слайдов. Ни точек, ни замеров:
-   v2.38 на каждое движение пальца пересобирал точки и читал ширину, и свайп
-   на телефоне шёл рывками (живой тест 20.10). Ширина берётся один раз на жест. */
-function carMove(dx, step) {
-  var list = carSlides(), n = carCount();
-  for (var i = 0; i < n; i++) {
-    var rel = carRelOf(i, n, dx);
-    carRel[i] = rel;
-    list[i].style.transform = 'translateX(' + (rel * step + dx) + 'px)';
-  }
-}
-
-function carGoTo(i) {
-  if (i === carIdx) return;
-  carPark = -(carRel[i] || 1);   /* уходящий — в сторону, противоположную приходу нового */
+/* Переход на слайд i из текущего положения x со скоростью v (px/мс).
+   Новый слайд становится «текущим», а сдвиг пересчитывается так, чтобы на
+   экране ничего не прыгнуло: он был на стороне s, значит теперь сдвинут на
+   x + s·шаг и доезжает пружиной в ноль. Уходящий — на сторону −s. */
+function carGoTo(i, x, v) {
+  var n = carCount();
+  if (n < 2 || i === carIdx) return;
+  var s = carRel[i] || 1;
+  var from = (typeof x === 'number' ? x : carPos) + s * carStepPx();
+  carPark = -s;
   carIdx = i;
-  carLayout(0, true);
+  carRenderDots(n);
+  carSettle(from, v || 0);
   /* Без вибрации (решение пользователя 20.10): смену слайда и так видно
      и чувствуется пальцем; системные карусели iOS тоже не вибрируют. */
 }
-/* Точки и стрелки — без пальца, длительность стандартная. */
-function carStdDur() {
-  var vp = document.getElementById('carVp');
-  if (vp) vp.style.removeProperty('--car-dur');
-}
-function carGo(step) {
+function carGo(step, x, v) {
   var n = carCount();
   if (n < 2) return;
-  carGoTo((carIdx + step + n) % n);
+  var to = (carIdx + step + n) % n;
+  /* Стрелки клавиатуры в покое: новый слайд приходит с той стороны, куда
+     нажали. Он сейчас за краем — пересадка на другую сторону не видна. */
+  if (typeof x !== 'number' && !carSpring && n === 2) carRel[to] = step > 0 ? 1 : -1;
+  carGoTo(to, x, v);
 }
 
 /* Ось жеста решаем после 8 px: вертикаль — прокрутке (браузер пришлёт
    pointercancel), горизонталь — карусели. Листаем, если протянули на 15%
-   ширины или смахнули быстрее 0.3 px/мс — скорость по последним 100 мс,
-   а не от касания: пауза перед смахиванием не должна гасить рывок.
-   Отмена касания посреди горизонтального жеста (её шлёт система, если
-   жест перехватили) доводится как отпускание, а не отскок назад. */
+   ширины или смахнули быстрее 0.3 px/мс — скорость по последним 100 мс.
+   Отмена касания посреди горизонтального жеста доводится как отпускание.
+   Палец, пойманный посреди доводки, подхватывает слайд с того места, где он
+   сейчас, а не с исходного. */
 function carBind() {
   var vp = document.getElementById('carVp');
   if (!vp) return;
   var raf = 0;
-  function frame() { raf = 0; if (carDrag && carDrag.axis === 'x') carMove(carDrag.dx, carDrag.step); }
+  function frame() { raf = 0; if (carDrag && carDrag.axis === 'x') carApply(carDrag.dx); }
   function release(ev) {
     var d = carDrag;
     carDrag = null;
@@ -3450,46 +3490,38 @@ function carBind() {
     var first = d.trail[0];
     for (var i = d.trail.length - 1; i >= 0; i--) { if (t - d.trail[i][1] > 100) { first = d.trail[i]; break; } }
     var v = (d.dx - first[0]) / Math.max(16, t - first[1]);
-    var w = d.step - CAR_GAP;
+    var w = carStepPx() - CAR_GAP;
     var step = (d.dx < -w * 0.15 || v < -0.3) ? 1 : (d.dx > w * 0.15 || v > 0.3) ? -1 : 0;
-    /* Длительность — чтобы слайд СТАРТОВАЛ со скоростью пальца: у кривой
-       начальная скорость = наклон × путь / время, отсюда время = наклон ×
-       путь / скорость пальца. v2.38.2 считал без наклона и с потолком 380 мс —
-       слайд в момент отпускания рвался в 2–5 раз быстрее пальца. Рамки
-       300–600 мс: короче — рывок, дольше — вязко. */
-    var rem = step ? d.step - Math.abs(d.dx) : Math.abs(d.dx);
-    var dur = Math.abs(v) > 0.05 ? Math.max(300, Math.min(600, CAR_EASE_SLOPE * rem / Math.abs(v))) : 450;
-    var vp2 = document.getElementById('carVp');
-    if (vp2) vp2.style.setProperty('--car-dur', Math.round(dur) + 'ms');
     if (step && carCount() > 1) {
-      carGo(step);
+      carGo(step, d.dx, v);
     } else {
       /* Недотянули — сосед прячется туда же, откуда выглянул. */
-      if (carCount() === 2 && carRel[1 - carIdx]) carPark = carRel[1 - carIdx];
-      carLayout(0, true);
+      if (d.dx) carPark = d.dx < 0 ? 1 : -1;
+      carSettle(d.dx, v);
     }
   }
   vp.addEventListener('pointerdown', function (ev) {
     if (ev.button !== 0 || carCount() < 2) return;
-    carDrag = { x0: ev.clientX, y0: ev.clientY, axis: null, dx: 0, id: ev.pointerId, step: 0,
+    carDrag = { x0: ev.clientX, y0: ev.clientY, axis: null, dx: 0, base: 0, id: ev.pointerId,
                 trail: [[0, ev.timeStamp]] };
   });
   vp.addEventListener('pointermove', function (ev) {
     if (!carDrag) return;
-    var dx = ev.clientX - carDrag.x0, dy = ev.clientY - carDrag.y0;
+    var mx = ev.clientX - carDrag.x0, my = ev.clientY - carDrag.y0;
     if (!carDrag.axis) {
-      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+      if (Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my)) {
         carDrag.axis = 'x';
-        carDrag.step = carSlides()[0].offsetWidth + CAR_GAP;
-        vp.classList.remove('anim');
+        if (carSpring) { cancelAnimationFrame(carSpring); carSpring = 0; }
+        carDrag.base = carPos;
+        carDrag.trail = [[carPos, ev.timeStamp]];
         try { vp.setPointerCapture(carDrag.id); } catch (e) {}
-      } else if (Math.abs(dy) > 8) {
+      } else if (Math.abs(my) > 8) {
         carDrag.axis = 'y';
       }
     }
     if (carDrag.axis !== 'x') return;
-    carDrag.dx = dx;
-    carDrag.trail.push([dx, ev.timeStamp]);
+    carDrag.dx = carDrag.base + mx;
+    carDrag.trail.push([carDrag.dx, ev.timeStamp]);
     if (carDrag.trail.length > 12) carDrag.trail.shift();
     if (!raf) raf = requestAnimationFrame(frame);
   });
@@ -3503,8 +3535,8 @@ function carBind() {
   }, true);
   vp.addEventListener('keydown', function (ev) {
     if (ev.target !== vp) return;
-    if (ev.key === 'ArrowRight') { ev.preventDefault(); carStdDur(); carGo(1); }
-    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); carStdDur(); carGo(-1); }
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); carGo(1); }
+    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); carGo(-1); }
   });
 }
 
