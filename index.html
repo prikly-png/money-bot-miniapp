@@ -238,7 +238,10 @@ body {
   margin: 0 var(--s5);
   will-change: transform;
 }
-.car-vp.anim .car-slide { transition: transform 320ms cubic-bezier(0.23, 1, 0.32, 1); }
+/* Доводка после отпускания: длительность ставит скрипт (--car-dur) по скорости
+   пальца — быстрый флик доезжает быстро, медленный плавно; кривая мягкая,
+   без рывка в начале (v2.38 начинал доводку скачком). */
+.car-vp.anim .car-slide { transition: transform var(--car-dur, 340ms) cubic-bezier(0.22, 0.61, 0.36, 1); }
 .car-vp.anim .car-slide.car-jump { transition: none; }   /* перескок на другую сторону — без пролёта через экран */
 @media (prefers-reduced-motion: reduce) { .car-vp.anim .car-slide { transition: none; } }
 
@@ -1035,7 +1038,7 @@ var LS_CACHE = 'miniapp_last_payload';
    deploy_miniapp.sh кладёт его же рядом в version.json, и открытая старая
    копия, сверившись с ним, перезагружается сама. Номер виден в подвале —
    сразу понятно, что открыто. */
-var APP_VERSION = '2.38.1';
+var APP_VERSION = '2.38.2';
 var SS_RELOAD   = 'miniapp_reload_to';   /* к какой версии уже пробовали перезагрузиться */
 var appNewer    = '';                    /* на сайте новее, но перезагрузка не помогла */
 
@@ -3336,6 +3339,7 @@ var carIdx    = 0;
 var carRel    = [0, 1];
 var carDrag   = null;
 var carNoClick = false;   /* после свайпа гасим клик, иначе тап по сумме сменил бы валюту */
+var carPark   = 1;        /* где в покое ждёт соседний слайд при двух слайдах: 1 справа, −1 слева */
 
 function carSlides() {
   return [document.getElementById('slideToday'), document.getElementById('slidePace')];
@@ -3344,9 +3348,13 @@ function carCount() {
   var p = document.getElementById('slidePace');
   return (p && !p.classList.contains('hidden')) ? 2 : 1;
 }
+/* При двух слайдах сосед в покое стоит там, куда ушёл (carPark): после
+   свайпа влево уходящий слайд уезжает ВЛЕВО и там остаётся. v2.38 ставил его
+   в покое всегда справа — и на доводке он летел через весь экран навстречу
+   приходящему (живой тест v2.38.1: «анимация резкая»). */
 function carRelOf(i, n, dx) {
   var d = ((i - carIdx) % n + n) % n;
-  if (n === 2) return (d === 1 && dx > 0) ? -1 : d;
+  if (n === 2) return d === 0 ? 0 : (dx > 0 ? -1 : dx < 0 ? 1 : carPark);
   return d > n / 2 ? d - n : d;
 }
 
@@ -3384,7 +3392,7 @@ function carRenderDots(n) {
     b.setAttribute('aria-label', list[i].getAttribute('aria-label'));
     b.setAttribute('aria-current', i === carIdx ? 'true' : 'false');
     b.appendChild(document.createElement('i'));
-    b.addEventListener('click', carGoTo.bind(null, i));
+    b.addEventListener('click', function (k) { return function () { carStdDur(); carGoTo(k); }; }(i));
     box.appendChild(b);
   }
 }
@@ -3403,9 +3411,15 @@ function carMove(dx, step) {
 
 function carGoTo(i) {
   if (i === carIdx) return;
+  carPark = -(carRel[i] || 1);   /* уходящий — в сторону, противоположную приходу нового */
   carIdx = i;
   carLayout(0, true);
   haptic();
+}
+/* Точки и стрелки — без пальца, длительность стандартная. */
+function carStdDur() {
+  var vp = document.getElementById('carVp');
+  if (vp) vp.style.removeProperty('--car-dur');
 }
 function carGo(step) {
   var n = carCount();
@@ -3436,7 +3450,19 @@ function carBind() {
     var v = (d.dx - first[0]) / Math.max(16, t - first[1]);
     var w = d.step - CAR_GAP;
     var step = (d.dx < -w * 0.15 || v < -0.3) ? 1 : (d.dx > w * 0.15 || v > 0.3) ? -1 : 0;
-    if (step && carCount() > 1) carGo(step); else carLayout(0, true);
+    /* Остаток пути / скорость пальца, в рамках 180–380 мс: доводка
+       продолжает движение с той же скоростью, а не начинает своё. */
+    var rem = step ? d.step - Math.abs(d.dx) : Math.abs(d.dx);
+    var dur = Math.abs(v) > 0.3 ? Math.max(180, Math.min(380, rem / Math.abs(v))) : 340;
+    var vp2 = document.getElementById('carVp');
+    if (vp2) vp2.style.setProperty('--car-dur', Math.round(dur) + 'ms');
+    if (step && carCount() > 1) {
+      carGo(step);
+    } else {
+      /* Недотянули — сосед прячется туда же, откуда выглянул. */
+      if (carCount() === 2 && carRel[1 - carIdx]) carPark = carRel[1 - carIdx];
+      carLayout(0, true);
+    }
   }
   vp.addEventListener('pointerdown', function (ev) {
     if (ev.button !== 0 || carCount() < 2) return;
@@ -3472,8 +3498,8 @@ function carBind() {
   }, true);
   vp.addEventListener('keydown', function (ev) {
     if (ev.target !== vp) return;
-    if (ev.key === 'ArrowRight') { ev.preventDefault(); carGo(1); }
-    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); carGo(-1); }
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); carStdDur(); carGo(1); }
+    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); carStdDur(); carGo(-1); }
   });
 }
 
